@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcarchive
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# Сгенерированный XcodeGen проект
+PlannerApp.xcodeproj/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/*/.build/
+
+# Прочее
+*.ipa
+*.dmg

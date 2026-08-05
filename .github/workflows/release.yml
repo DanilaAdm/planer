@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build .ipa + .dmg and publish
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -switch /Applications/Xcode.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned iOS .ipa
+        run: ./scripts/build_ipa.sh
+
+      - name: Build macOS .dmg
+        run: ./scripts/build_dmg.sh
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/PlannerApp-unsigned.ipa
+            build/PlannerApp-macOS.dmg
+          body: |
+            ## Планер репетитора ${{ github.ref_name }}
+
+            ### iOS (`PlannerApp-unsigned.ipa`)
+            Неподписанный .ipa. Установка через [AltStore](https://altstore.io) или
+            [Sideloadly](https://sideloadly.io) с вашим Apple ID.
+            При бесплатном Apple ID приложение нужно переподписывать раз в 7 дней.
+
+            ### macOS (`PlannerApp-macOS.dmg`)
+            Откройте .dmg и перетащите «Планер» в «Программы».
+            При первом запуске: правый клик по приложению → «Открыть» (обход Gatekeeper),
+            либо выполните: `xattr -dr com.apple.quarantine "/Applications/Планер.app"`.
+
+            ### Настройка
+            Перед использованием укажите в приложении данные Supabase (Project URL и anon-ключ).
+            Инструкция: [supabase/README.md](https://github.com/${{ github.repository }}/blob/main/supabase/README.md).
