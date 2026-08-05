@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Планер репетитора — приложение для macOS</title>
+<meta name="description" content="Календарь занятий, ученики, учёт оплат и заработка. Приложение для macOS.">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    --brand: #E5813F;
+    --brand-deep: #C15C25;
+    --ink: #33417E;
+    --bg: #ECEDF4;
+    --surface: #FBFBFE;
+    --line: rgba(51, 65, 126, 0.12);
+    --muted: rgba(51, 65, 126, 0.66);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #E8EAF6;
+      --bg: #14161F;
+      --surface: #1D2030;
+      --line: rgba(232, 234, 246, 0.14);
+      --muted: rgba(232, 234, 246, 0.66);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px 80px; }
+  header {
+    text-align: center;
+    padding: 72px 0 48px;
+    background: linear-gradient(160deg, #FFF4EA 0%, #FAE1CD 100%);
+    border-bottom: 1px solid var(--line);
+  }
+  @media (prefers-color-scheme: dark) {
+    header { background: linear-gradient(160deg, #241C18 0%, #1A1620 100%); }
+  }
+  header img { width: 112px; height: 112px; border-radius: 24px; }
+  h1 { font-size: 34px; margin: 20px 0 8px; letter-spacing: -0.02em; }
+  .tagline { color: var(--muted); margin: 0 auto; max-width: 460px; }
+  .cta { margin-top: 32px; }
+  .button {
+    display: inline-block;
+    background: linear-gradient(135deg, #E98A47, #D3672D);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 17px;
+    padding: 15px 34px;
+    border-radius: 14px;
+    box-shadow: 0 8px 20px rgba(211, 103, 45, 0.32);
+  }
+  .button:hover { filter: brightness(1.06); }
+  .meta { margin-top: 14px; font-size: 14px; color: var(--muted); }
+  h2 { font-size: 22px; margin: 48px 0 16px; letter-spacing: -0.01em; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 24px 28px;
+  }
+  ol { margin: 0; padding-left: 22px; }
+  ol li { margin-bottom: 10px; }
+  ol li:last-child { margin-bottom: 0; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+    overflow-x: auto;
+  }
+  .note {
+    border-left: 3px solid var(--brand);
+    padding: 4px 0 4px 18px;
+    color: var(--muted);
+  }
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 14px;
+    color: var(--muted);
+    text-align: center;
+  }
+  a { color: var(--brand-deep); }
+  @media (prefers-color-scheme: dark) { a { color: #F0A470; } }
+</style>
+</head>
+<body>
+
+<header>
+  <img src="icon.png" alt="Иконка приложения «Планер»">
+  <h1>Планер репетитора</h1>
+  <p class="tagline">Календарь занятий, карточки учеников, учёт оплат и заработка за месяц. Данные синхронизируются между устройствами и доступны без интернета.</p>
+  <div class="cta">
+    <a class="button" href="https://github.com/DanilaAdm/planer/releases/latest/download/PlannerApp-macOS.dmg">Скачать для macOS</a>
+    <div class="meta">macOS 14 и новее · Apple Silicon и Intel · бесплатно</div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <h2>Первый запуск</h2>
+  <div class="card">
+    <ol>
+      <li>Откройте скачанный <code>PlannerApp-macOS.dmg</code> и перетащите «Планер» в «Программы».</li>
+      <li>Запустите приложение двойным кликом. macOS покажет предупреждение — нажмите <b>«Готово»</b>.</li>
+      <li>Откройте <b>Системные настройки → Конфиденциальность и безопасность</b>.</li>
+      <li>Пролистайте вниз до раздела «Безопасность» и нажмите <b>«Всё равно открыть»</b>.</li>
+      <li>Подтвердите паролем администратора.</li>
+    </ol>
+  </div>
+  <p class="note">Это делается один раз. Дальше приложение открывается как любое другое.</p>
+
+  <h2>Почему macOS ругается</h2>
+  <p>Приложение не прошло нотаризацию у Apple. Для неё нужен платный аккаунт Apple Developer Program, которого у проекта нет. Система не знает автора и поэтому просит подтвердить запуск вручную — это не признак того, что с файлом что-то не так.</p>
+  <p>Исходный код открыт, сборку выполняет GitHub Actions прямо из репозитория: <a href="https://github.com/DanilaAdm/planer">github.com/DanilaAdm/planer</a>. Контрольные суммы каждого релиза лежат в файле <code>SHA256SUMS</code> рядом с загрузкой.</p>
+
+  <h2>Установка одной командой</h2>
+  <p>Если предпочитаете терминал — эта команда скачает последнюю версию, положит её в «Программы» и снимет карантин, так что ходить в системные настройки не придётся:</p>
+  <pre><code>curl -fsSL https://github.com/DanilaAdm/planer/releases/latest/download/install-macos.sh | bash</code></pre>
+
+  <h2>Аккаунт и данные</h2>
+  <p>При первом запуске нужно создать аккаунт по e-mail и паролю — больше ничего настраивать не надо. Данные привязаны к аккаунту, поэтому с теми же почтой и паролем вы увидите свой календарь на другом компьютере.</p>
+  <p>Расписание, ученики и оплаты хранятся в базе PostgreSQL на <a href="https://supabase.com">Supabase</a>. Записи каждого пользователя изолированы политиками Row Level Security: другие пользователи сервиса не могут их прочитать. Локальная копия лежит на вашем компьютере, чтобы приложение работало без интернета.</p>
+
+  <h2>iPhone и iPad</h2>
+  <p>Версии для iOS пока нет в свободном доступе: распространение приложений на iPhone требует отдельного решения по подписи. Она появится позже.</p>
+
+  <footer>
+    <a href="https://github.com/DanilaAdm/planer">Исходный код</a> ·
+    <a href="https://github.com/DanilaAdm/planer/releases">Все версии</a> ·
+    <a href="https://github.com/DanilaAdm/planer/issues">Сообщить о проблеме</a>
+  </footer>
+
+</div>
+</body>
+</html>

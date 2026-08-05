@@ -27,12 +27,14 @@
 ```
 Packages/PlannerCore/   Swift Package: модели и бизнес-логика (без UI), покрыт unit-тестами
 App/Sources/            Приложение SwiftUI (iOS + macOS): экраны, Supabase, SwiftData-кэш
+App/Resources/          Asset catalog: иконка приложения
 App/Tests/              Unit-тесты уровня приложения
 App/UITests/            UI-тесты (XCUITest)
 supabase/               SQL-схема PostgreSQL и инструкция по настройке
-scripts/                Скрипты сборки (.ipa, .dmg) и генерации проекта
+scripts/                Сборка (.dmg, .ipa), генерация проекта и иконки, установщик
+docs/                   Страница загрузки (GitHub Pages)
 project.yml             Описание Xcode-проекта для XcodeGen
-.github/workflows/      CI (тесты) и Release (сборка .ipa/.dmg → GitHub Releases)
+.github/workflows/      CI (тесты) и Release (сборка .dmg → GitHub Releases)
 ```
 
 Бизнес-логика вынесена в `PlannerCore` и полностью покрыта тестами (расчёт заработка, списание
@@ -56,6 +58,23 @@ open PlannerApp.xcodeproj
 ```
 
 Проект `PlannerApp.xcodeproj` не хранится в git — он генерируется из `project.yml`.
+
+Собрать дистрибутив для macOS локально (то же самое делает CI при создании тега):
+
+```bash
+./scripts/build_dmg.sh                 # build/PlannerApp-macOS.dmg
+MARKETING_VERSION=1.2.0 ./scripts/build_dmg.sh   # с явной версией
+```
+
+Скрипт собирает universal-бинарник (arm64 + x86_64), подписывает ad-hoc и проверяет подпись —
+без валидной подписи приложение не запустится на Apple Silicon.
+
+Иконка не хранится картинкой, а рисуется кодом из `scripts/make_icons.swift` — так она остаётся
+резкой на всех размерах. Перерисовать после правки цветов или геометрии:
+
+```bash
+./scripts/make_icons.sh
+```
 
 ## Аккаунт и хранение данных
 
@@ -100,29 +119,38 @@ TEST_RUNNER_RUN_NETWORK_TESTS=1 xcodebuild test -project PlannerApp.xcodeproj -s
 UI-тесты запускают приложение с аргументом `-uitest`: используется хранилище в памяти
 (без сети и Supabase) с предзаполненными данными.
 
-## Установка через GitHub (для пользователей)
+## Установка (для пользователей)
 
-Готовые файлы публикуются на вкладке **Releases** при создании тега `vX.Y.Z`
-(например, `git tag v1.0.0 && git push origin v1.0.0`). CI соберёт и приложит:
+Страница загрузки: **https://danilaadm.github.io/planer/**
 
-### iOS — `PlannerApp-unsigned.ipa`
-
-Неподписанный `.ipa`. Установите одним из способов с вашим Apple ID:
-
-- **AltStore**: https://altstore.io — установите AltServer на компьютер, затем добавьте `.ipa`.
-- **Sideloadly**: https://sideloadly.io — подключите iPhone и перетащите `.ipa`.
-
-При бесплатном Apple ID подпись действует **7 дней**, после чего приложение нужно переустановить/
-переподписать. С платным Apple Developer аккаунтом — 1 год.
-
-### macOS — `PlannerApp-macOS.dmg`
+Готовый `PlannerApp-macOS.dmg` публикуется на вкладке **Releases** при создании тега `vX.Y.Z`
+(например, `git tag v1.0.0 && git push origin v1.0.0`). Сборка universal: работает и на Apple
+Silicon, и на Intel, требуется macOS 14 или новее.
 
 1. Откройте `.dmg` и перетащите «Планер» в «Программы».
-2. Первый запуск: правый клик по приложению → **«Открыть»** (обход Gatekeeper), либо в терминале:
+2. Запустите приложение. macOS покажет предупреждение — нажмите **«Готово»**.
+3. Откройте **Системные настройки → Конфиденциальность и безопасность**, пролистайте вниз
+   до раздела «Безопасность» и нажмите **«Всё равно открыть»**, затем подтвердите паролем.
+
+Предупреждение появляется потому, что приложение не нотаризовано: для нотаризации нужен
+платный Apple Developer Program. Подтверждение требуется один раз.
+
+Обход через правый клик → «Открыть» больше не работает: Apple убрала его начиная с
+[macOS 15 Sequoia](https://developer.apple.com/news/?id=saqachfa).
+
+Альтернатива — установка одной командой, без похода в системные настройки:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Планер.app"
+curl -fsSL https://github.com/DanilaAdm/planer/releases/latest/download/install-macos.sh | bash
 ```
+
+Контрольные суммы каждого релиза лежат в `SHA256SUMS`, проверить: `shasum -a 256 -c SHA256SUMS`.
+
+### iOS
+
+Сборка для iPhone и iPad пока не публикуется. Без платного Apple Developer Program `.ipa`
+приходится переподписывать своим Apple ID каждые 7 дней, поэтому этот путь вынесен в отдельную
+задачу. Скрипт `scripts/build_ipa.sh` в репозитории остаётся рабочим.
 
 ## Как это работает (архитектура)
 

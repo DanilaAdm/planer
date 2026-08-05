@@ -11,8 +11,8 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build .ipa + .dmg and publish
-    runs-on: macos-14
+    name: Build macOS .dmg and publish
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -25,31 +25,78 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build unsigned iOS .ipa
-        run: ./scripts/build_ipa.sh
+      - name: Resolve version
+        id: version
+        run: |
+          # При запуске по тегу v1.2.3 берём 1.2.3, при ручном запуске — версию-заглушку.
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            [0-9]*) ;;
+            *) VERSION="0.0.0-$(git rev-parse --short HEAD)" ;;
+          esac
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Версия сборки: $VERSION"
 
       - name: Build macOS .dmg
+        env:
+          MARKETING_VERSION: ${{ steps.version.outputs.version }}
+          CURRENT_PROJECT_VERSION: ${{ github.run_number }}
         run: ./scripts/build_dmg.sh
+
+      - name: Collect release assets
+        run: |
+          cp scripts/install-macos.sh build/
+          cd build
+          shasum -a 256 PlannerApp-macOS.dmg install-macos.sh > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/PlannerApp-unsigned.ipa
             build/PlannerApp-macOS.dmg
+            build/install-macos.sh
+            build/SHA256SUMS
           body: |
             ## Планер репетитора ${{ github.ref_name }}
 
-            ### iOS (`PlannerApp-unsigned.ipa`)
-            Неподписанный .ipa. Установка через [AltStore](https://altstore.io) или
-            [Sideloadly](https://sideloadly.io) с вашим Apple ID.
-            При бесплатном Apple ID приложение нужно переподписывать раз в 7 дней.
+            Версия для **macOS 14 и новее**, universal (Apple Silicon и Intel).
 
-            ### macOS (`PlannerApp-macOS.dmg`)
-            Откройте .dmg и перетащите «Планер» в «Программы».
-            При первом запуске: правый клик по приложению → «Открыть» (обход Gatekeeper),
-            либо выполните: `xattr -dr com.apple.quarantine "/Applications/Планер.app"`.
+            ### Установка
 
-            ### Настройка
-            Перед использованием укажите в приложении данные Supabase (Project URL и anon-ключ).
-            Инструкция: [supabase/README.md](https://github.com/${{ github.repository }}/blob/main/supabase/README.md).
+            Скачайте `PlannerApp-macOS.dmg`, откройте его и перетащите «Планер» в «Программы».
+
+            При первом запуске macOS покажет предупреждение — приложение не нотаризовано,
+            потому что у проекта нет платного Apple Developer Program. Что делать:
+
+            1. Двойной клик по «Планер», в окне предупреждения нажать **«Готово»**.
+            2. Открыть **Системные настройки → Конфиденциальность и безопасность**.
+            3. Пролистать вниз до раздела «Безопасность» и нажать **«Всё равно открыть»**.
+            4. Подтвердить паролем администратора.
+
+            Это делается один раз. Дальше приложение запускается как обычное.
+
+            Альтернатива — установка одной командой, без похода в настройки:
+
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install-macos.sh | bash
+            ```
+
+            ### После установки
+
+            На экране входа нужны только **e-mail и пароль** — адрес сервера уже зашит
+            в приложение. Создайте аккаунт при первом запуске: данные привязываются к нему
+            и будут доступны с любого устройства.
+
+            ### Проверка загруженного файла
+
+            В `SHA256SUMS` лежат контрольные суммы. Сверить:
+
+            ```bash
+            shasum -a 256 -c SHA256SUMS
+            ```
+
+            ### iOS
+
+            Сборка для iPhone и iPad пока не публикуется — она требует отдельного решения
+            по подписи и появится позже.
