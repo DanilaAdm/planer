@@ -96,6 +96,43 @@ final class CachedLesson {
     }
 }
 
+/// Изменение, которое не удалось отправить на сервер.
+///
+/// Живёт в той же базе, что и кэш, но переживает его очистку: правки, сделанные
+/// без интернета, должны уехать на сервер даже после смены аккаунта и обратно.
+@Model
+final class PendingChange {
+    @Attribute(.unique) var id: UUID
+    var ownerId: UUID
+    var kindRaw: String
+    var entityId: UUID
+    var payload: Data?
+    var createdAt: Date
+
+    init(_ operation: PendingOperation) {
+        self.id = operation.id
+        self.ownerId = operation.ownerId
+        self.kindRaw = operation.kind.rawValue
+        self.entityId = operation.entityId
+        self.payload = operation.payload
+        self.createdAt = operation.createdAt
+    }
+
+    /// `nil`, если в базе оказался неизвестный вид операции (например, запись
+    /// оставила более новая версия приложения).
+    func toDomain() -> PendingOperation? {
+        guard let kind = PendingOperation.Kind(rawValue: kindRaw) else { return nil }
+        return PendingOperation(
+            id: id,
+            ownerId: ownerId,
+            kind: kind,
+            entityId: entityId,
+            payload: payload,
+            createdAt: createdAt
+        )
+    }
+}
+
 /// Локальная (кэш) модель личной задачи (раздел «Планы») для офлайн-чтения.
 @Model
 final class CachedPersonalTask {

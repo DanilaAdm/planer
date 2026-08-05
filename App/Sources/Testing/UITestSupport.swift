@@ -56,7 +56,7 @@ enum UITestSupport {
             )
         }
 
-        env.setRemoteStore(remote)
+        env.connectInMemory(remote: remote)
         supabase.forceSignedIn(email: "uitest@example.com")
         await env.reloadStudents()
         await env.loadLessons(for: Date(), scope: .week)

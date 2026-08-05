@@ -12,6 +12,8 @@ final class AppEnvironment: ObservableObject {
     @Published var selectedDate: Date = Date()
     @Published var isSyncing = false
     @Published var isOnline = true
+    /// Сколько изменений ещё не уехало на сервер.
+    @Published private(set) var pendingChangesCount = 0
 
     // Состояние экранов живёт здесь, а не в самих `View`: на macOS разделы
     // пересоздаются при переключении вкладок, и иначе режим календаря, открытая
@@ -33,20 +35,85 @@ final class AppEnvironment: ObservableObject {
     private var repository: PlannerRepository?
     private var currentRange: DateRange?
 
+    /// Кому принадлежит содержимое локального кэша.
+    private static let cacheOwnerKey = "cached_owner_id"
+
     init(modelContainer: ModelContainer) {
         self.localStore = SwiftDataLocalStore(modelContainer: modelContainer)
     }
 
-    /// Пересобрать репозиторий при появлении удалённого хранилища (после входа).
-    func setRemoteStore(_ remote: RemoteStore?) {
-        if let remote {
-            repository = PlannerRepository(remote: remote, local: localStore)
-        } else {
-            repository = nil
-        }
+    /// Подключить хранилище реального пользователя после входа.
+    ///
+    /// Перед этим кэш проверяется на принадлежность: если на устройстве лежат
+    /// данные другого аккаунта, они стираются. Иначе при первой же неудачной
+    /// загрузке репозиторий отдал бы их как данные текущего пользователя.
+    func connect(remote: RemoteStore, ownerId: UUID) async {
+        await discardCacheIfForeign(ownerId: ownerId)
+        repository = PlannerRepository(
+            remote: remote,
+            local: localStore,
+            outbox: localStore,
+            ownerId: ownerId
+        )
+        await syncPending()
+    }
+
+    /// Подключить хранилища демо-режима и UI-тестов: и удалённое, и локальное
+    /// живут в памяти, поэтому база устройства не затрагивается.
+    func connectInMemory(remote: RemoteStore) {
+        repository = PlannerRepository(remote: remote, local: InMemoryLocalStore())
+        pendingChangesCount = 0
+    }
+
+    func disconnect() {
+        repository = nil
+        pendingChangesCount = 0
+        isOnline = true
+        // Показанные данные принадлежали вышедшему пользователю: держать их в
+        // памяти незачем, иначе они мелькнут при следующем входе.
+        students = []
+        lessons = []
+        personalTasks = []
     }
 
     var hasRepository: Bool { repository != nil }
+
+    private func discardCacheIfForeign(ownerId: UUID) async {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: Self.cacheOwnerKey)
+        guard previous != ownerId.uuidString else { return }
+        try? await localStore.clearAll()
+        students = []
+        lessons = []
+        personalTasks = []
+        defaults.set(ownerId.uuidString, forKey: Self.cacheOwnerKey)
+    }
+
+    /// Досылка изменений, накопленных без интернета.
+    func syncPending() async {
+        guard let repository else { return }
+        await repository.flushPending()
+        await refreshSyncState()
+    }
+
+    /// Отправить на сервер всё, что лежит на этом устройстве.
+    ///
+    /// Ручное восстановление для случая «на компьютере данные есть, на телефоне
+    /// пусто»: доносит записи, которые не доехали и не попали в очередь.
+    func uploadLocalData() async {
+        guard let repository else { return }
+        isSyncing = true
+        await repository.uploadLocalCache()
+        isSyncing = false
+        await reloadAll()
+    }
+
+    /// Забрать у репозитория итог последнего обмена с сервером.
+    private func refreshSyncState() async {
+        guard let repository else { return }
+        pendingChangesCount = await repository.pendingCount()
+        isOnline = await repository.isServerReachable()
+    }
 
     func studentColorHex(for id: UUID) -> String {
         students.first(where: { $0.id == id })?.colorHex ?? HexColor.palette[0]
@@ -59,6 +126,9 @@ final class AppEnvironment: ObservableObject {
     // MARK: - Загрузка
 
     func reloadAll() async {
+        // Ручное обновление — самый подходящий момент дожать очередь: обычно
+        // его нажимают именно после того, как связь вернулась.
+        await syncPending()
         await reloadStudents()
         if let range = currentRange {
             await loadLessons(in: range)
@@ -69,6 +139,7 @@ final class AppEnvironment: ObservableObject {
         guard let repository else { return }
         isSyncing = true
         students = await repository.students()
+        await refreshSyncState()
         isSyncing = false
     }
 
@@ -88,6 +159,7 @@ final class AppEnvironment: ObservableObject {
         isSyncing = true
         lessons = await repository.lessons(in: range)
         personalTasks = await repository.tasks(in: range)
+        await refreshSyncState()
         isSyncing = false
     }
 
@@ -95,13 +167,13 @@ final class AppEnvironment: ObservableObject {
 
     func saveStudent(_ student: Student) async {
         guard let repository else { return }
-        isOnline = await repository.saveStudent(student)
+        await repository.saveStudent(student)
         await reloadStudents()
     }
 
     func deleteStudent(_ student: Student) async {
         guard let repository else { return }
-        isOnline = await repository.deleteStudent(id: student.id)
+        await repository.deleteStudent(id: student.id)
         await reloadStudents()
         if let range = currentRange { await loadLessons(in: range) }
     }
@@ -119,14 +191,14 @@ final class AppEnvironment: ObservableObject {
 
     func saveLesson(_ lesson: Lesson) async {
         guard let repository else { return }
-        isOnline = await repository.saveLesson(lesson)
-        if let range = currentRange { await loadLessons(in: range) }
+        await repository.saveLesson(lesson)
+        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
     }
 
     func deleteLesson(_ lesson: Lesson) async {
         guard let repository else { return }
-        isOnline = await repository.deleteLesson(id: lesson.id)
-        if let range = currentRange { await loadLessons(in: range) }
+        await repository.deleteLesson(id: lesson.id)
+        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
     }
 
     /// Переключить отметку «Занятие оплачено».
@@ -164,14 +236,14 @@ final class AppEnvironment: ObservableObject {
 
     func saveTask(_ task: PersonalTask) async {
         guard let repository else { return }
-        isOnline = await repository.saveTask(task)
-        if let range = currentRange { await loadLessons(in: range) }
+        await repository.saveTask(task)
+        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
     }
 
     func deleteTask(_ task: PersonalTask) async {
         guard let repository else { return }
-        isOnline = await repository.deleteTask(id: task.id)
-        if let range = currentRange { await loadLessons(in: range) }
+        await repository.deleteTask(id: task.id)
+        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
     }
 
     /// Переключить отметку «Выполнено» у личной задачи.

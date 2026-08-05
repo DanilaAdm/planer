@@ -4,19 +4,42 @@
 PostgreSQL с автоматическим REST API (PostgREST) и авторизацией. Приложение не подключается к базе
 напрямую (это небезопасно), а работает через официальный SDK `supabase-swift`.
 
+Адрес проекта и публикуемый ключ уже зашиты в приложение
+([`App/Sources/Config/SupabaseSecrets.swift`](../App/Sources/Config/SupabaseSecrets.swift)),
+поэтому пользователю ничего настраивать не нужно: он вводит только e-mail и пароль.
+Инструкция ниже нужна, если вы поднимаете **свой** проект Supabase.
+
 ## Шаги
 
-1. Создайте бесплатный проект на https://supabase.com.
-2. Откройте **SQL Editor** и выполните содержимое [`migrations/0001_init.sql`](migrations/0001_init.sql),
-   затем [`migrations/0002_personal_tasks.sql`](migrations/0002_personal_tasks.sql).
-   Это создаст таблицы `students`, `lessons`, `personal_tasks`, тип `work_format` и политики RLS.
-3. В **Project Settings → API** скопируйте:
-   - `Project URL` (например, `https://xxxx.supabase.co`);
-   - `anon public` ключ.
-4. В **Authentication → Providers** оставьте включённым Email (для входа по e-mail).
-   При желании отключите подтверждение почты (Authentication → Providers → Email → Confirm email).
-5. Запустите приложение и на экране настроек введите `Project URL` и `anon` ключ,
-   затем зарегистрируйтесь/войдите по e-mail.
+1. Создайте бесплатный проект на https://supabase.com. При создании включите
+   **Enable Data API** и **Automatically expose new tables**.
+2. Откройте **SQL Editor** и выполните по очереди:
+   - [`migrations/0001_init.sql`](migrations/0001_init.sql) — таблицы `students`, `lessons`,
+     тип `work_format`, политики RLS;
+   - [`migrations/0002_personal_tasks.sql`](migrations/0002_personal_tasks.sql) — таблица
+     `personal_tasks` для раздела «Планы»;
+   - [`migrations/0003_hardening.sql`](migrations/0003_hardening.sql) — гарантированно включённый
+     RLS, отзыв прав у анонимной роли и триггер, проставляющий владельца из токена.
+
+   Последний скрипт заканчивается проверкой: он должен вернуть три строки, у всех
+   `rls_enabled = true` и `policies = 1`. Если это не так — данные пользователей не изолированы,
+   и запускать приложение нельзя.
+
+3. **Authentication → Sign In / Providers → User Signups** → выключите **Confirm email**.
+
+   Это обязательный шаг. С включённым подтверждением `signUp` не возвращает сессию, а следующая
+   попытка входа падает с ошибкой `email_not_confirmed`, и аккаунт остаётся недоступным.
+
+   Проверить настройку можно запросом (в ответе должно быть `"mailer_autoconfirm": true`):
+
+   ```bash
+   curl -s "https://<проект>.supabase.co/auth/v1/settings" -H "apikey: <publishable-ключ>"
+   ```
+
+4. **Project Settings → API Keys** → скопируйте **Publishable key** (`sb_publishable_…`)
+   и подставьте его вместе с Project URL в `SupabaseSecrets.swift`.
+
+   Секретный ключ (`sb_secret_…`) обходит RLS и в приложение попадать не должен никогда.
 
 ## Структура данных
 
@@ -26,4 +49,17 @@ PostgreSQL с автоматическим REST API (PostgREST) и автори�
 - `personal_tasks` — личные задачи из раздела «Планы»: название, дата/время, заметка,
   отметка «выполнено», цвет.
 
-RLS-политики гарантируют, что каждый пользователь видит только свои записи (`owner_id = auth.uid()`).
+Заработок отдельной таблицы не имеет: он рассчитывается из уроков и цены урока ученика.
+
+## Как устроена изоляция данных
+
+У каждой строки есть `owner_id` — идентификатор пользователя из Supabase Auth. Защита
+трёхслойная:
+
+1. **RLS-политики** `owner_id = auth.uid()` не отдают чужие строки даже при прямом запросе к API.
+2. **Триггер `set_owner_id`** перезаписывает присланный клиентом `owner_id` значением из токена,
+   поэтому подделать владельца невозможно даже изменённым клиентом.
+3. **Роль `anon` лишена прав** на эти таблицы: запрос без входа получает отказ, а не пустой ответ.
+
+Локальный кэш на устройстве привязан к идентификатору пользователя: при входе под другим
+аккаунтом он стирается, иначе офлайн-чтение показало бы данные предыдущего пользователя.

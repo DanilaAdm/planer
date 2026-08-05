@@ -97,4 +97,66 @@ final class DTOMappingTests: XCTestCase {
         XCTAssertTrue(json.contains("\"is_done\""))
         XCTAssertTrue(json.contains("\"color_hex\""))
     }
+
+    // MARK: - Очистка полей и владелец
+
+    /// Пустое значение обязано уехать как `null`: иначе PostgREST не увидит поле
+    /// в теле запроса и оставит в базе прежнюю ссылку.
+    func testClearedGoogleDocURLIsSentAsNull() throws {
+        var student = TestSupport.makeStudent(name: "Без документа")
+        student.googleDocURL = nil
+        let json = try encodedJSON(StudentDTO(student))
+        XCTAssertTrue(json.contains("\"google_doc_url\":null"), "Получено: \(json)")
+    }
+
+    func testClearedLessonNoteIsSentAsNull() throws {
+        let lesson = Lesson(studentId: UUID(), startAt: TestSupport.date(2026, 3, 2, 10), note: nil)
+        let json = try encodedJSON(LessonDTO(lesson))
+        XCTAssertTrue(json.contains("\"note\":null"), "Получено: \(json)")
+    }
+
+    func testClearedTaskNoteIsSentAsNull() throws {
+        let task = PersonalTask(title: "Дело", scheduledAt: TestSupport.date(2026, 3, 2, 9), note: nil)
+        let json = try encodedJSON(PersonalTaskDTO(task))
+        XCTAssertTrue(json.contains("\"note\":null"), "Получено: \(json)")
+    }
+
+    /// Дату создания проставляет сервер: отправляя её, клиент перезаписывал бы
+    /// значение в базе при каждом сохранении.
+    func testCreatedAtIsNotSentToServer() throws {
+        let student = TestSupport.makeStudent(name: "Кто-то")
+        XCTAssertFalse(try encodedJSON(StudentDTO(student)).contains("created_at"))
+
+        let lesson = Lesson(studentId: UUID(), startAt: TestSupport.date(2026, 3, 2, 10))
+        XCTAssertFalse(try encodedJSON(LessonDTO(lesson)).contains("created_at"))
+
+        let task = PersonalTask(title: "Дело", scheduledAt: TestSupport.date(2026, 3, 2, 9))
+        XCTAssertFalse(try encodedJSON(PersonalTaskDTO(task)).contains("created_at"))
+    }
+
+    func testOwnerIdIsSentWhenKnownAndOmittedOtherwise() throws {
+        let owner = UUID()
+        let student = TestSupport.makeStudent(name: "Владелец")
+        XCTAssertTrue(try encodedJSON(StudentDTO(student, ownerId: owner)).contains("owner_id"))
+        XCTAssertFalse(try encodedJSON(StudentDTO(student)).contains("owner_id"))
+    }
+
+    /// Ответ сервера содержит `created_at` и `owner_id` — декодирование обязано
+    /// их принимать, хотя обратно они не отправляются.
+    func testDecodesServerPayloadWithOwnerAndCreatedAt() throws {
+        let json = """
+            {"id":"\(UUID().uuidString)","owner_id":"\(UUID().uuidString)","name":"Аня",
+             "color_hex":"#4E9CFF","price_per_lesson":1200,"work_format":"postpay",
+             "google_doc_url":null,"paid_lessons_total":0,"lessons_used":0,
+             "created_at":"2026-03-02T10:00:00.000Z"}
+            """
+        let dto = try PlannerCoding.makeDecoder().decode(StudentDTO.self, from: Data(json.utf8))
+        XCTAssertEqual(dto.name, "Аня")
+        XCTAssertNil(dto.google_doc_url)
+        XCTAssertNotNil(dto.owner_id)
+    }
+
+    private func encodedJSON<T: Encodable>(_ value: T) throws -> String {
+        String(data: try PlannerCoding.makeEncoder().encode(value), encoding: .utf8)!
+    }
 }

@@ -56,11 +56,30 @@ struct SettingsView: View {
                                     kind: env.isOnline ? .success : .warning
                                 )
                             }
+                            if env.pendingChangesCount > 0 {
+                                RowDivider()
+                                settingRow(
+                                    title: "Ждут отправки",
+                                    value: "\(env.pendingChangesCount)"
+                                )
+                                Text("Изменения сохранены на устройстве и уедут на сервер, как только появится интернет.")
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.inkSoft)
+                            }
                             RowDivider()
                             Button("Обновить данные") {
                                 Task { await env.reloadAll() }
                             }
                             .buttonStyle(.secondarySoft)
+
+                            Button("Отправить данные этого устройства на сервер") {
+                                Task { await env.uploadLocalData() }
+                            }
+                            .buttonStyle(.secondarySoft)
+                            .disabled(env.isSyncing)
+                            Text("Пригодится, если на этом устройстве ученики и расписание есть, а на другом их не видно.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.inkSoft)
                         }
                     }
 

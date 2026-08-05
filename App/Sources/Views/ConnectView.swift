@@ -10,39 +10,23 @@ struct ConnectView: View {
     @State private var password = ""
     @State private var isRegistering = false
     @State private var isBusy = false
+    @State private var showsAdvanced = false
+    @State private var alertMessage: String?
 
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.Spacing.lg) {
                 header
 
-                demoBox
-
-                SectionCard(title: "Подключение к Supabase (PostgreSQL)") {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        LabeledField(title: "Project URL", text: $config.supabaseURL,
-                                     placeholder: "https://xxxx.supabase.co")
-                        LabeledField(title: "Anon-ключ", text: $config.supabaseAnonKey,
-                                     placeholder: "eyJhbGci...", secure: true)
-                        Button("Сохранить и подключиться") {
-                            AppConfigStore.save(config)
-                            supabase.configure(with: config)
-                        }
-                        .buttonStyle(.primaryFilled)
-                        .disabled(!config.isConfigured)
-                    }
-                }
-
-                if supabase.authState != .unconfigured {
+                if supabase.authState == .unconfigured {
+                    connectionBox
+                } else {
                     authBox
                 }
 
-                if let message = supabase.lastErrorMessage {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(Theme.destructive)
-                        .multilineTextAlignment(.center)
-                }
+                demoBox
+
+                advancedBox
             }
             .padding(Theme.Spacing.lg)
             .frame(maxWidth: 480)
@@ -50,6 +34,21 @@ struct ConnectView: View {
         }
         .screenBackground()
         .tint(Theme.accent)
+        .alert("Не удалось войти", isPresented: showsAlert) {
+            Button("Понятно", role: .cancel) {
+                alertMessage = nil
+                supabase.lastErrorMessage = nil
+            }
+        } message: {
+            Text(alertMessage ?? "")
+        }
+    }
+
+    private var showsAlert: Binding<Bool> {
+        Binding(
+            get: { alertMessage != nil },
+            set: { if !$0 { alertMessage = nil } }
+        )
     }
 
     private var header: some View {
@@ -106,6 +105,7 @@ struct ConnectView: View {
                 }
                 .buttonStyle(.primaryFilled)
                 .disabled(isBusy || email.isEmpty || password.isEmpty)
+                .accessibilityIdentifier(isRegistering ? "signUpButton" : "signInButton")
 
                 Button(isRegistering ? "У меня уже есть аккаунт" : "Создать аккаунт") {
                     isRegistering.toggle()
@@ -113,17 +113,73 @@ struct ConnectView: View {
                 .font(.footnote)
                 .tint(Theme.accent)
                 .frame(maxWidth: .infinity)
+
+                Text("Аккаунт сохраняется на сервере: с теми же почтой и паролем вы войдёте с любого устройства, и ученики, календарь и заработок будут на месте.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.inkSoft)
             }
         }
+    }
+
+    private var connectionBox: some View {
+        SectionCard(title: "Подключение к серверу") {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("Не удалось прочитать адрес проекта. Проверьте настройки подключения ниже.")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.destructive)
+                Button("Подключиться заново") {
+                    supabase.configure(with: AppConfigStore.load())
+                }
+                .buttonStyle(.primaryFilled)
+            }
+        }
+    }
+
+    /// Адрес проекта и ключ зашиты в приложение, поэтому обычному пользователю
+    /// этот раздел не нужен — он спрятан и нужен только для отладки.
+    private var advancedBox: some View {
+        DisclosureGroup(isExpanded: $showsAdvanced) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                LabeledField(title: "Project URL", text: $config.supabaseURL,
+                             placeholder: "https://xxxx.supabase.co")
+                LabeledField(title: "Ключ доступа", text: $config.supabaseAnonKey,
+                             placeholder: "sb_publishable_...", secure: true)
+                Button("Сохранить и подключиться") {
+                    AppConfigStore.save(config)
+                    supabase.configure(with: config)
+                }
+                .buttonStyle(.primaryFilled)
+                .disabled(!config.isConfigured)
+
+                Button("Вернуть настройки по умолчанию") {
+                    AppConfigStore.resetToDefaults()
+                    config = AppConfigStore.load()
+                    supabase.configure(with: config)
+                }
+                .font(.footnote)
+                .tint(Theme.accent)
+            }
+            .padding(.top, Theme.Spacing.sm)
+        } label: {
+            Text("Настройки подключения")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Theme.inkSoft)
+        }
+        .card()
     }
 
     private func authenticate() async {
         isBusy = true
         defer { isBusy = false }
-        if isRegistering {
-            await supabase.signUp(email: email, password: password)
+
+        let succeeded = isRegistering
+            ? await supabase.signUp(email: email, password: password)
+            : await supabase.signIn(email: email, password: password)
+
+        if succeeded {
+            password = ""
         } else {
-            await supabase.signIn(email: email, password: password)
+            alertMessage = supabase.lastErrorMessage ?? AuthMessage.invalidCredentials
         }
     }
 }

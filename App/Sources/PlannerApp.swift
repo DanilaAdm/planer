@@ -8,16 +8,22 @@ import AppKit
 struct PlannerApp: App {
     @StateObject private var supabase = SupabaseManager()
     @StateObject private var env: AppEnvironment
+    @Environment(\.scenePhase) private var scenePhase
     private let modelContainer: ModelContainer
 
     init() {
         let container: ModelContainer
         do {
-            container = try ModelContainer(for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self)
+            container = try ModelContainer(
+                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self, PendingChange.self
+            )
         } catch {
             // В крайнем случае используем БД в памяти, чтобы приложение запустилось.
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
-            container = try! ModelContainer(for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self, configurations: config)
+            container = try! ModelContainer(
+                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self, PendingChange.self,
+                configurations: config
+            )
         }
         self.modelContainer = container
         _env = StateObject(wrappedValue: AppEnvironment(modelContainer: container))
@@ -29,6 +35,12 @@ struct PlannerApp: App {
                 .environmentObject(supabase)
                 .environmentObject(env)
                 .task { await bootstrap() }
+                .onChange(of: scenePhase) { _, phase in
+                    // Возврат в приложение — момент, когда связь чаще всего
+                    // появляется снова: пробуем дожать накопленные правки.
+                    guard phase == .active else { return }
+                    Task { await env.syncPending() }
+                }
         }
         #if os(macOS)
         .defaultSize(width: 1100, height: 760)

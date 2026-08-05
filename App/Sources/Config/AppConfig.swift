@@ -49,13 +49,25 @@ enum AppConfigStore {
     private static let urlKey = "supabase_url"
     private static let keyKey = "supabase_anon_key"
 
+    /// Значения берутся по убыванию приоритета: переменные окружения (сборка в CI),
+    /// затем введённые пользователем вручную, затем зашитые в приложение.
+    ///
+    /// Последний источник и делает вход возможным на новом устройстве без
+    /// какой-либо настройки.
     static func load() -> AppConfig {
         let defaults = UserDefaults.standard
-        let envURL = ProcessInfo.processInfo.environment["SUPABASE_URL"]
-        let envKey = ProcessInfo.processInfo.environment["SUPABASE_ANON_KEY"]
+        let environment = ProcessInfo.processInfo.environment
         return AppConfig(
-            supabaseURL: envURL ?? defaults.string(forKey: urlKey) ?? "",
-            supabaseAnonKey: envKey ?? defaults.string(forKey: keyKey) ?? ""
+            supabaseURL: firstFilled(
+                environment["SUPABASE_URL"],
+                defaults.string(forKey: urlKey),
+                SupabaseSecrets.url
+            ),
+            supabaseAnonKey: firstFilled(
+                environment["SUPABASE_ANON_KEY"],
+                defaults.string(forKey: keyKey),
+                SupabaseSecrets.publishableKey
+            )
         )
     }
 
@@ -63,5 +75,22 @@ enum AppConfigStore {
         let defaults = UserDefaults.standard
         defaults.set(config.supabaseURL, forKey: urlKey)
         defaults.set(config.supabaseAnonKey, forKey: keyKey)
+    }
+
+    /// Забыть настройки, введённые вручную, и вернуться к зашитым значениям.
+    static func resetToDefaults() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: urlKey)
+        defaults.removeObject(forKey: keyKey)
+    }
+
+    /// Первое непустое значение: пустая строка в UserDefaults не должна
+    /// перекрывать зашитый дефолт.
+    private static func firstFilled(_ candidates: String?...) -> String {
+        for candidate in candidates {
+            let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !value.isEmpty { return value }
+        }
+        return ""
     }
 }

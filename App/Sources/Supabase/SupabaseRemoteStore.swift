@@ -10,6 +10,12 @@ final class SupabaseRemoteStore: RemoteStore {
         self.client = client
     }
 
+    /// Владелец сохраняемых строк. Сервер всё равно проставит его сам из токена,
+    /// но отправлять значение явно надёжнее, чем полагаться на умолчание схемы.
+    private var ownerId: UUID? {
+        client.auth.currentUser?.id
+    }
+
     // MARK: - Ученики
 
     func fetchStudents() async throws -> [Student] {
@@ -24,7 +30,7 @@ final class SupabaseRemoteStore: RemoteStore {
     func upsertStudent(_ student: Student) async throws {
         try await client
             .from("students")
-            .upsert(StudentDTO(student))
+            .upsert(StudentDTO(student, ownerId: ownerId))
             .execute()
     }
 
@@ -54,7 +60,7 @@ final class SupabaseRemoteStore: RemoteStore {
     func upsertLesson(_ lesson: Lesson) async throws {
         try await client
             .from("lessons")
-            .upsert(LessonDTO(lesson))
+            .upsert(LessonDTO(lesson, ownerId: ownerId))
             .execute()
     }
 
@@ -84,7 +90,7 @@ final class SupabaseRemoteStore: RemoteStore {
     func upsertTask(_ task: PersonalTask) async throws {
         try await client
             .from("personal_tasks")
-            .upsert(PersonalTaskDTO(task))
+            .upsert(PersonalTaskDTO(task, ownerId: ownerId))
             .execute()
     }
 

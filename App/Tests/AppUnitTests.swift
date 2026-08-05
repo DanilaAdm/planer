@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import Supabase
 @testable import PlannerApp
 import PlannerCore
 
@@ -69,6 +70,121 @@ final class AppUnitTests: XCTestCase {
     func testIsConfiguredRequiresKey() {
         XCTAssertFalse(AppConfig(supabaseURL: "https://abc.supabase.co", supabaseAnonKey: "  ").isConfigured)
         XCTAssertTrue(AppConfig(supabaseURL: "https://abc.supabase.co/rest/v1/", supabaseAnonKey: "k").isConfigured)
+    }
+
+    // MARK: - Подключение по умолчанию
+
+    /// Ключевое свойство для входа на новом устройстве: приложение готово к
+    /// работе сразу после установки, без ручного ввода адреса и ключа.
+    func testAppIsConfiguredOutOfTheBox() {
+        AppConfigStore.resetToDefaults()
+        let config = AppConfigStore.load()
+        XCTAssertTrue(config.isConfigured)
+        XCTAssertEqual(config.normalizedURL?.absoluteString, SupabaseSecrets.url)
+        XCTAssertEqual(config.normalizedKey, SupabaseSecrets.publishableKey)
+    }
+
+    func testEmbeddedKeyIsPublishableNotSecret() {
+        XCTAssertTrue(SupabaseSecrets.publishableKey.hasPrefix("sb_publishable_"))
+        XCTAssertFalse(SupabaseSecrets.publishableKey.contains("sb_secret_"),
+                       "Секретный ключ обходит RLS и не должен попадать в приложение")
+    }
+
+    func testManualSettingsOverrideDefaultsAndCanBeReset() {
+        let custom = AppConfig(supabaseURL: "https://custom.supabase.co", supabaseAnonKey: "custom-key")
+        AppConfigStore.save(custom)
+        XCTAssertEqual(AppConfigStore.load().supabaseAnonKey, "custom-key")
+
+        AppConfigStore.resetToDefaults()
+        XCTAssertEqual(AppConfigStore.load().supabaseAnonKey, SupabaseSecrets.publishableKey)
+    }
+
+    /// Пустая строка, сохранённая прежней версией приложения, не должна
+    /// перекрывать зашитое значение — иначе вход снова упрётся в форму настроек.
+    func testEmptySavedValueFallsBackToDefault() {
+        AppConfigStore.save(AppConfig(supabaseURL: "  ", supabaseAnonKey: ""))
+        let config = AppConfigStore.load()
+        XCTAssertTrue(config.isConfigured)
+        XCTAssertEqual(config.normalizedKey, SupabaseSecrets.publishableKey)
+        AppConfigStore.resetToDefaults()
+    }
+
+    // MARK: - Тексты ошибок входа
+
+    func testWrongCredentialsProduceRequestedMessage() {
+        let error = AuthError.api(
+            message: "Invalid login credentials",
+            errorCode: .invalidCredentials,
+            underlyingData: Data(),
+            underlyingResponse: HTTPURLResponse()
+        )
+        XCTAssertEqual(AuthMessage.text(for: error), "Email или пароль неверный\nПопробуйте снова")
+    }
+
+    /// «Нет такого пользователя» намеренно даёт тот же текст: иначе форма входа
+    /// позволяла бы выяснять, зарегистрирован ли адрес.
+    func testUnknownUserLooksTheSameAsWrongPassword() {
+        let error = AuthError.api(
+            message: "User not found",
+            errorCode: .userNotFound,
+            underlyingData: Data(),
+            underlyingResponse: HTTPURLResponse()
+        )
+        XCTAssertEqual(AuthMessage.text(for: error), AuthMessage.invalidCredentials)
+    }
+
+    func testWeakPasswordHasItsOwnMessage() {
+        let error = AuthError.api(
+            message: "Password should be at least 6 characters",
+            errorCode: .weakPassword,
+            underlyingData: Data(),
+            underlyingResponse: HTTPURLResponse()
+        )
+        XCTAssertTrue(AuthMessage.text(for: error).contains("6 символов"))
+        XCTAssertNotEqual(AuthMessage.text(for: error), AuthMessage.invalidCredentials)
+    }
+
+    func testExistingAccountIsReportedSeparately() {
+        let error = AuthError.api(
+            message: "User already registered",
+            errorCode: .userAlreadyExists,
+            underlyingData: Data(),
+            underlyingResponse: HTTPURLResponse()
+        )
+        XCTAssertTrue(AuthMessage.text(for: error).contains("уже существует"))
+    }
+
+    func testNoInternetIsNotReportedAsWrongPassword() {
+        let error = URLError(.notConnectedToInternet)
+        XCTAssertEqual(AuthMessage.text(for: error), AuthMessage.offline)
+        XCTAssertTrue(AuthMessage.isConnectivityFailure(error))
+    }
+
+    func testServerErrorIsNotTreatedAsConnectivityFailure() {
+        XCTAssertFalse(AuthMessage.isConnectivityFailure(URLError(.badServerResponse)))
+    }
+
+    // MARK: - Очередь неотправленных изменений
+
+    func testPendingChangeRoundTrip() {
+        let operation = PendingOperation(
+            ownerId: UUID(),
+            kind: .upsertLesson,
+            entityId: UUID(),
+            payload: Data("{}".utf8)
+        )
+        let restored = PendingChange(operation).toDomain()
+        XCTAssertEqual(restored, operation)
+    }
+
+    /// Запись, оставленную более новой версией приложения, надо пропускать, а не
+    /// падать на ней.
+    func testUnknownPendingKindIsIgnored() {
+        let change = PendingChange(
+            PendingOperation(ownerId: UUID(), kind: .upsertTask, entityId: UUID(), payload: nil)
+        )
+        change.kindRaw = "somethingFromTheFuture"
+        XCTAssertNil(change.toDomain())
     }
 
     // MARK: - Google-документ ученика

@@ -2,9 +2,20 @@ import Foundation
 import SwiftData
 import PlannerCore
 
-/// Локальный кэш поверх SwiftData. Изолирован как actor через ModelActor.
+/// Локальный кэш и очередь досылки поверх SwiftData.
+/// Изолирован как actor через ModelActor.
 @ModelActor
 actor SwiftDataLocalStore: LocalStore {
+
+    // MARK: - Очистка
+
+    /// Стереть весь кэш, не трогая очередь неотправленных изменений.
+    func clearAll() async throws {
+        try modelContext.delete(model: CachedStudent.self)
+        try modelContext.delete(model: CachedLesson.self)
+        try modelContext.delete(model: CachedPersonalTask.self)
+        try modelContext.save()
+    }
 
     // MARK: - Ученики
 
@@ -120,5 +131,49 @@ actor SwiftDataLocalStore: LocalStore {
         } else {
             modelContext.insert(CachedPersonalTask(task))
         }
+    }
+}
+
+// MARK: - Очередь неотправленных изменений
+
+extension SwiftDataLocalStore: OutboxStore {
+    func enqueue(_ operation: PendingOperation) async throws {
+        // На сервер должно уехать итоговое состояние сущности, а не вся история
+        // правок, поэтому прежние операции по тому же объекту вытесняются.
+        let owner = operation.ownerId
+        let entity = operation.entityId
+        let descriptor = FetchDescriptor<PendingChange>(
+            predicate: #Predicate { $0.ownerId == owner && $0.entityId == entity }
+        )
+        for stale in try modelContext.fetch(descriptor) {
+            modelContext.delete(stale)
+        }
+        modelContext.insert(PendingChange(operation))
+        try modelContext.save()
+    }
+
+    func pending(ownerId: UUID) async throws -> [PendingOperation] {
+        let descriptor = FetchDescriptor<PendingChange>(
+            predicate: #Predicate { $0.ownerId == ownerId }
+        )
+        return try modelContext.fetch(descriptor)
+            .compactMap { $0.toDomain() }
+            .sorted(by: PendingOperation.sendOrder)
+    }
+
+    func remove(id: UUID) async throws {
+        let descriptor = FetchDescriptor<PendingChange>(predicate: #Predicate { $0.id == id })
+        for item in try modelContext.fetch(descriptor) {
+            modelContext.delete(item)
+        }
+        try modelContext.save()
+    }
+
+    func removeAll(ownerId: UUID) async throws {
+        try modelContext.delete(
+            model: PendingChange.self,
+            where: #Predicate { $0.ownerId == ownerId }
+        )
+        try modelContext.save()
     }
 }

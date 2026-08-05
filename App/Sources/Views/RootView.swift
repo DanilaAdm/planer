@@ -24,26 +24,34 @@ struct RootView: View {
         #if os(macOS)
         .background(WindowChrome(titlebarColor: isSignedIn ? Theme.topBarTop : nil))
         #endif
+        // Подключение — через `task(id:)`, а не только `onChange`: сессия
+        // восстанавливается из Keychain синхронно при запуске, и подписка на
+        // изменения могла бы пропустить этот первый переход в «вошёл».
+        .task(id: supabase.authState) {
+            guard case .signedIn = supabase.authState else { return }
+            await connectSignedInUser()
+        }
+        // Разрыв — только по факту смены состояния. В `task(id:)` эта ветка
+        // срабатывала бы и на стартовом `.unconfigured`, сбрасывая хранилища,
+        // которые демо-режим и UI-тесты подключают параллельно на запуске.
         .onChange(of: supabase.authState) { _, newValue in
-            handleAuthChange(newValue)
+            guard case .signedIn = newValue else {
+                env.testMode = false
+                env.disconnect()
+                return
+            }
         }
     }
 
-    private func handleAuthChange(_ state: SupabaseManager.AuthState) {
-        if case .signedIn = state {
-            if !env.testMode {
-                env.setRemoteStore(supabase.makeRemoteStore())
-            }
-            Task {
-                await env.reloadStudents()
-                await env.loadLessons(for: env.selectedDate, scope: .week)
-            }
-        } else {
-            // Выход (в т.ч. из демо-режима): сбрасываем состояние, чтобы можно было
-            // подключить реальный Supabase.
-            env.testMode = false
-            env.setRemoteStore(nil)
+    private func connectSignedInUser() async {
+        // Демо-режим и UI-тесты подключают свои хранилища сами.
+        guard !env.testMode else { return }
+
+        if let remote = supabase.makeRemoteStore(), let ownerId = supabase.currentUserId {
+            await env.connect(remote: remote, ownerId: ownerId)
         }
+        await env.reloadStudents()
+        await env.loadLessons(for: env.selectedDate, scope: .week)
     }
 }
 
@@ -69,12 +77,18 @@ enum AppTab: String, CaseIterable, Identifiable {
 }
 
 private struct MainTabView: View {
+    @EnvironmentObject private var env: AppEnvironment
+
     var body: some View {
-        #if os(macOS)
-        DesktopShell()
-        #else
-        MobileTabView()
-        #endif
+        VStack(spacing: 0) {
+            SyncBanner()
+            #if os(macOS)
+            DesktopShell()
+            #else
+            MobileTabView()
+            #endif
+        }
+        .animation(.easeInOut(duration: 0.2), value: env.isOnline)
     }
 }
 

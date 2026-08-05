@@ -67,7 +67,9 @@ enum DemoMode {
 
         let remote = DemoRemoteStore()
         await remote.seed(students: students, lessons: lessons, tasks: tasks)
-        env.setRemoteStore(remote)
+        // Кэш демо-режима тоже в памяти: демонстрационные ученики не должны
+        // оседать в базе устройства и всплывать потом у реального пользователя.
+        env.connectInMemory(remote: remote)
 
         supabase.signInDemo()
         await env.reloadStudents()

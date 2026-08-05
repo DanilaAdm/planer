@@ -17,6 +17,10 @@ public protocol RemoteStore: Sendable {
 
 /// Локальный кэш (SwiftData) для офлайн-чтения.
 public protocol LocalStore: Sendable {
+    /// Полностью очистить кэш. Вызывается при входе под другим аккаунтом:
+    /// иначе офлайн-чтение показало бы данные предыдущего пользователя.
+    func clearAll() async throws
+
     func loadStudents() async throws -> [Student]
     func saveStudents(_ students: [Student]) async throws
     func upsertStudent(_ student: Student) async throws
