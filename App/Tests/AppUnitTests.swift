@@ -263,4 +263,185 @@ final class AppUnitTests: XCTestCase {
         XCTAssertFalse(html.contains("accounts.google.com/ServiceLogin"),
                        "Google требует вход — документ закрыт настройками доступа")
     }
+
+    // MARK: - Проверка обновлений
+
+    private static let releaseStub = ReleaseInfo(
+        version: AppVersion("1.1.0")!,
+        pageURL: URL(string: "https://github.com/DanilaAdm/planer/releases/tag/v1.1.0")!,
+        downloadURL: URL(string: "https://github.com/DanilaAdm/planer/releases/download/v1.1.0/PlannerApp-macOS.dmg")!
+    )
+
+    /// Отдельное хранилище настроек: тест не должен запоминать «баннер закрыт»
+    /// в настройках самого приложения.
+    private func makeDefaults() throws -> UserDefaults {
+        let name = "UpdateCheckerTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    @MainActor
+    func testNewerReleaseShowsBanner() async throws {
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: try makeDefaults(),
+            fetchLatest: { Self.releaseStub }
+        )
+        await checker.check()
+
+        XCTAssertEqual(checker.status, .available(Self.releaseStub))
+        XCTAssertEqual(checker.bannerRelease, Self.releaseStub)
+    }
+
+    @MainActor
+    func testSameOrNewerInstalledVersionShowsNoBanner() async throws {
+        for installed in ["1.1.0", "1.2.0"] {
+            let checker = UpdateChecker(
+                installedVersion: installed,
+                defaults: try makeDefaults(),
+                fetchLatest: { Self.releaseStub }
+            )
+            await checker.check()
+
+            XCTAssertEqual(checker.status, .upToDate, "Версия \(installed)")
+            XCTAssertNil(checker.bannerRelease)
+        }
+    }
+
+    /// Закрытый баннер не возвращается для той же версии, но в настройках
+    /// обновление по-прежнему видно.
+    @MainActor
+    func testDismissedBannerStaysHiddenForSameVersion() async throws {
+        let defaults = try makeDefaults()
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: defaults,
+            fetchLatest: { Self.releaseStub }
+        )
+        await checker.check()
+        checker.dismissBanner()
+
+        XCTAssertNil(checker.bannerRelease)
+        XCTAssertEqual(checker.status, .available(Self.releaseStub))
+
+        // Новый запуск приложения: решение пользователя пережило перезапуск.
+        let restarted = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: defaults,
+            fetchLatest: { Self.releaseStub }
+        )
+        await restarted.check()
+        XCTAssertNil(restarted.bannerRelease)
+    }
+
+    /// Следующий релиз должен пробиться сквозь ранее закрытый баннер.
+    @MainActor
+    func testDismissedBannerReappearsForNextVersion() async throws {
+        let defaults = try makeDefaults()
+        let older = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: defaults,
+            fetchLatest: { Self.releaseStub }
+        )
+        await older.check()
+        older.dismissBanner()
+
+        let next = ReleaseInfo(
+            version: AppVersion("1.2.0")!,
+            pageURL: Self.releaseStub.pageURL,
+            downloadURL: nil
+        )
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: defaults,
+            fetchLatest: { next }
+        )
+        await checker.check()
+
+        XCTAssertEqual(checker.bannerRelease, next)
+    }
+
+    /// Нет сети — нет баннера и никаких сообщений об ошибке поверх приложения.
+    @MainActor
+    func testFailedCheckIsSilent() async throws {
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: try makeDefaults(),
+            fetchLatest: { throw URLError(.notConnectedToInternet) }
+        )
+        await checker.check()
+
+        XCTAssertEqual(checker.status, .failed)
+        XCTAssertNil(checker.bannerRelease)
+    }
+
+    /// Автоматическая проверка не ходит в сеть на каждый возврат в приложение,
+    /// а кнопка в настройках срабатывает всегда.
+    @MainActor
+    func testAutomaticChecksAreThrottledButForcedOneIsNot() async throws {
+        let counter = CallCounter()
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: try makeDefaults(),
+            minimumInterval: 600,
+            fetchLatest: {
+                await counter.increment()
+                return Self.releaseStub
+            }
+        )
+
+        await checker.check()
+        await checker.check()
+        var count = await counter.count
+        XCTAssertEqual(count, 1)
+
+        await checker.check(force: true)
+        count = await counter.count
+        XCTAssertEqual(count, 2)
+    }
+
+    /// Неудачная проверка не занимает интервал: следующая попытка идёт в сеть.
+    @MainActor
+    func testFailedCheckIsRetriedWithoutWaiting() async throws {
+        let counter = CallCounter()
+        let checker = UpdateChecker(
+            installedVersion: "1.0.0",
+            defaults: try makeDefaults(),
+            minimumInterval: 600,
+            fetchLatest: {
+                await counter.increment()
+                throw URLError(.timedOut)
+            }
+        )
+
+        await checker.check()
+        await checker.check()
+        let count = await counter.count
+        XCTAssertEqual(count, 2)
+    }
+
+    /// Реальный ответ GitHub: сетевой тест, включается через RUN_NETWORK_TESTS=1.
+    func testLatestReleaseIsReadableFromGitHub() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_NETWORK_TESTS"] == "1",
+            "Сетевой тест: запускается с RUN_NETWORK_TESTS=1"
+        )
+
+        let release: ReleaseInfo
+        do {
+            release = try await GitHubReleases.latest()
+        } catch let error as URLError where Self.connectivityErrors.contains(error.code) {
+            throw XCTSkip("Нет доступа к сети: \(error.localizedDescription)")
+        }
+
+        XCTAssertGreaterThanOrEqual(release.version, AppVersion("1.0.0")!)
+        XCTAssertNotNil(release.downloadURL, "В релизе нет файла PlannerApp-macOS.dmg")
+    }
+}
+
+/// Счётчик обращений к сети для тестов проверки обновлений.
+private actor CallCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

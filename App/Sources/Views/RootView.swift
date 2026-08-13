@@ -6,6 +6,7 @@ import AppKit
 struct RootView: View {
     @EnvironmentObject private var supabase: SupabaseManager
     @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var updates: UpdateChecker
 
     private var isSignedIn: Bool {
         if case .signedIn = supabase.authState { return true }
@@ -13,7 +14,11 @@ struct RootView: View {
     }
 
     var body: some View {
-        Group {
+        // Сообщение об обновлении — над всем содержимым, включая экран входа:
+        // старая версия может не понимать данные, которые ждёт сервер.
+        VStack(spacing: 0) {
+            UpdateBanner()
+
             switch supabase.authState {
             case .signedIn:
                 MainTabView()
@@ -21,6 +26,7 @@ struct RootView: View {
                 ConnectView()
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: updates.bannerRelease)
         #if os(macOS)
         .background(WindowChrome(titlebarColor: isSignedIn ? Theme.topBarTop : nil))
         #endif

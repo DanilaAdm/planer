@@ -8,6 +8,7 @@ import AppKit
 struct PlannerApp: App {
     @StateObject private var supabase = SupabaseManager()
     @StateObject private var env: AppEnvironment
+    @StateObject private var updates = UpdateChecker()
     @Environment(\.scenePhase) private var scenePhase
     private let modelContainer: ModelContainer
 
@@ -36,12 +37,14 @@ struct PlannerApp: App {
             RootView()
                 .environmentObject(supabase)
                 .environmentObject(env)
+                .environmentObject(updates)
                 .task { await bootstrap() }
                 .onChange(of: scenePhase) { _, phase in
                     // Возврат в приложение — момент, когда связь чаще всего
                     // появляется снова: пробуем дожать накопленные правки.
                     guard phase == .active else { return }
                     Task { await env.syncPending() }
+                    Task { await updates.check() }
                 }
         }
         #if os(macOS)
@@ -69,5 +72,6 @@ struct PlannerApp: App {
         #endif
         let config = AppConfigStore.load()
         supabase.configure(with: config)
+        await updates.check()
     }
 }

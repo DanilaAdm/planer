@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var supabase: SupabaseManager
     @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var updates: UpdateChecker
+    @Environment(\.openURL) private var openURL
     @State private var config = AppConfigStore.load()
 
     var body: some View {
@@ -84,7 +86,16 @@ struct SettingsView: View {
                     }
 
                     SectionCard(title: "О приложении") {
-                        settingRow(title: "Версия", value: appVersion)
+                        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                            settingRow(title: "Версия", value: appVersion)
+                            RowDivider()
+                            updateStatus
+                            Button("Проверить обновления") {
+                                Task { await updates.check(force: true) }
+                            }
+                            .buttonStyle(.secondarySoft)
+                            .disabled(updates.status == .checking)
+                        }
                     }
                 }
                 .padding(Theme.Spacing.lg)
@@ -93,6 +104,49 @@ struct SettingsView: View {
             .screenBackground()
             .tint(Theme.accent)
             .navigationTitle("Настройки")
+        }
+    }
+
+    /// Что известно про обновления. Кнопка «Скачать» появляется только тогда,
+    /// когда на GitHub действительно лежит версия новее установленной.
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch updates.status {
+        case .idle:
+            Text("Приложение обновляется вручную: новая версия скачивается с GitHub.")
+                .font(.caption)
+                .foregroundStyle(Theme.inkSoft)
+        case .checking:
+            Text("Проверяем наличие обновлений…")
+                .font(.caption)
+                .foregroundStyle(Theme.inkSoft)
+        case .upToDate:
+            HStack {
+                Text("Обновления")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                StatusChip(text: "Последняя версия", systemImage: "checkmark", kind: .success)
+            }
+        case .failed:
+            Text("Не удалось проверить обновления — нет связи с GitHub.")
+                .font(.caption)
+                .foregroundStyle(Theme.inkSoft)
+        case let .available(release):
+            HStack {
+                Text("Доступна версия \(release.version.description)")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.ink)
+                Spacer()
+                StatusChip(text: "Обновление", systemImage: "arrow.down.circle", kind: .accent)
+            }
+            Button("Скачать обновление") {
+                openURL(release.updateURL)
+            }
+            .buttonStyle(.primaryFilled)
+            Text("Откроется загрузка с GitHub. Данные хранятся на сервере и при обновлении не теряются.")
+                .font(.caption)
+                .foregroundStyle(Theme.inkSoft)
         }
     }
 
@@ -111,8 +165,6 @@ struct SettingsView: View {
     }
 
     private var appVersion: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
+        "\(Bundle.main.marketingVersion) (\(Bundle.main.buildNumber))"
     }
 }
