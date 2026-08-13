@@ -10,6 +10,8 @@ public struct LessonDTO: Codable, Sendable, Equatable {
     public var duration_min: Int
     public var is_paid: Bool
     public var note: String?
+    /// Серия еженедельных повторений; `null` — разовое занятие.
+    public var series_id: UUID?
     public var created_at: Date
 
     public init(
@@ -20,6 +22,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
         duration_min: Int,
         is_paid: Bool,
         note: String?,
+        series_id: UUID? = nil,
         created_at: Date
     ) {
         self.id = id
@@ -29,6 +32,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
         self.duration_min = duration_min
         self.is_paid = is_paid
         self.note = note
+        self.series_id = series_id
         self.created_at = created_at
     }
 
@@ -41,6 +45,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
             duration_min: lesson.durationMinutes,
             is_paid: lesson.isPaid,
             note: lesson.note,
+            series_id: lesson.seriesId,
             created_at: lesson.createdAt
         )
     }
@@ -48,7 +53,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
-        case id, owner_id, student_id, start_at, duration_min, is_paid, note, created_at
+        case id, owner_id, student_id, start_at, duration_min, is_paid, note, series_id, created_at
     }
 
     public init(from decoder: Decoder) throws {
@@ -60,12 +65,13 @@ public struct LessonDTO: Codable, Sendable, Equatable {
         duration_min = try container.decode(Int.self, forKey: .duration_min)
         is_paid = try container.decode(Bool.self, forKey: .is_paid)
         note = try container.decodeIfPresent(String.self, forKey: .note)
+        series_id = try container.decodeIfPresent(UUID.self, forKey: .series_id)
         created_at = try container.decodeIfPresent(Date.self, forKey: .created_at) ?? Date()
     }
 
-    /// `note` кодируется явно, чтобы стёртая заметка уезжала на сервер как
-    /// `null`; `created_at` не отправляется, чтобы не перезаписывать дату
-    /// создания при каждом сохранении.
+    /// `note` и `series_id` кодируются явно, чтобы стёртая заметка и снятая
+    /// отметка повторения уезжали на сервер как `null`; `created_at` не
+    /// отправляется, чтобы не перезаписывать дату создания при каждом сохранении.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
@@ -75,6 +81,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
         try container.encode(duration_min, forKey: .duration_min)
         try container.encode(is_paid, forKey: .is_paid)
         try container.encode(note, forKey: .note)
+        try container.encode(series_id, forKey: .series_id)
     }
 
     public func toDomain() -> Lesson {
@@ -85,6 +92,7 @@ public struct LessonDTO: Codable, Sendable, Equatable {
             durationMinutes: duration_min,
             isPaid: is_paid,
             note: note,
+            seriesId: series_id,
             createdAt: created_at
         )
     }

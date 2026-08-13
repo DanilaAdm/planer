@@ -64,11 +64,28 @@ final class SupabaseRemoteStore: RemoteStore {
             .execute()
     }
 
+    func upsertLessons(_ lessons: [Lesson]) async throws {
+        guard !lessons.isEmpty else { return }
+        try await client
+            .from("lessons")
+            .upsert(lessons.map { LessonDTO($0, ownerId: ownerId) })
+            .execute()
+    }
+
     func deleteLesson(id: UUID) async throws {
         try await client
             .from("lessons")
             .delete()
             .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        try await client
+            .from("lessons")
+            .delete()
+            .eq("series_id", value: seriesId.uuidString)
+            .gt("start_at", value: PlannerCoding.iso8601.string(from: date))
             .execute()
     }
 
@@ -97,6 +114,33 @@ final class SupabaseRemoteStore: RemoteStore {
     func deleteTask(id: UUID) async throws {
         try await client
             .from("personal_tasks")
+            .delete()
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
+    // MARK: - Заметки недели
+
+    func fetchWeekNotes(weekStart: Date) async throws -> [WeekNote] {
+        let rows: [WeekNoteDTO] = try await client
+            .from("week_notes")
+            .select()
+            .eq("week_start", value: WeekNoteDTO.dayKey(from: weekStart))
+            .execute()
+            .value
+        return rows.map { $0.toDomain() }
+    }
+
+    func upsertWeekNote(_ note: WeekNote) async throws {
+        try await client
+            .from("week_notes")
+            .upsert(WeekNoteDTO(note, ownerId: ownerId))
+            .execute()
+    }
+
+    func deleteWeekNote(id: UUID) async throws {
+        try await client
+            .from("week_notes")
             .delete()
             .eq("id", value: id.uuidString)
             .execute()

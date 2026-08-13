@@ -11,16 +11,21 @@ public struct PendingOperation: Identifiable, Sendable, Equatable {
         case deleteStudent
         case upsertLesson
         case deleteLesson
+        /// Снятая отметка «каждую неделю»: убрать повторы серии.
+        case cancelLessonSeries
         case upsertTask
         case deleteTask
+        case upsertWeekNote
+        case deleteWeekNote
 
         /// Ученики отправляются раньше уроков: урок ссылается на ученика внешним
         /// ключом, и обратный порядок приведёт к отказу на стороне PostgreSQL.
+        /// Задачи и заметки недели ни на что не ссылаются, поэтому идут наравне.
         var sendPriority: Int {
             switch self {
             case .upsertStudent: return 0
-            case .upsertLesson, .upsertTask: return 1
-            case .deleteLesson, .deleteTask: return 2
+            case .upsertLesson, .upsertTask, .upsertWeekNote: return 1
+            case .deleteLesson, .cancelLessonSeries, .deleteTask, .deleteWeekNote: return 2
             case .deleteStudent: return 3
             }
         }
@@ -31,7 +36,8 @@ public struct PendingOperation: Identifiable, Sendable, Equatable {
     /// имени другого, поэтому операции всегда отбираются по этому полю.
     public let ownerId: UUID
     public let kind: Kind
-    /// Идентификатор ученика, урока или задачи, которых касается операция.
+    /// Идентификатор ученика, урока, задачи, заметки или серии повторений,
+    /// которых касается операция.
     public let entityId: UUID
     /// JSON доменной модели для сохранения; для удаления — `nil`.
     public let payload: Data?
@@ -51,6 +57,16 @@ public struct PendingOperation: Identifiable, Sendable, Equatable {
         self.entityId = entityId
         self.payload = payload
         self.createdAt = createdAt
+    }
+}
+
+/// Нагрузка операции `cancelLessonSeries`: момент, после которого повторы серии
+/// больше не нужны. Обёртка, а не сама дата: в очереди лежит JSON-объект.
+public struct LessonSeriesCancellation: Codable, Sendable, Equatable {
+    public let after: Date
+
+    public init(after: Date) {
+        self.after = after
     }
 }
 

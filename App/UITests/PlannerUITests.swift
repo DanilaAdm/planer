@@ -49,6 +49,38 @@ final class PlannerUITests: XCTestCase {
         ).firstMatch
     }
 
+    /// Поле ввода: многострочный `TextField` на macOS попадает в дерево как textView.
+    private func inputField(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        let types = [
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue
+        ]
+        return app.descendants(matching: .any).matching(
+            NSPredicate(format: "elementType IN %@ AND identifier == %@", types, identifier)
+        ).firstMatch
+    }
+
+    /// Элемент по идентификатору: пустых слотов в блоке несколько, поэтому нужен первый.
+    private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// Элемент по подписи для доступности. Нужен там, где идентификатор
+    /// перекрыт родителем: блок дня в дневнике помечает собой все свои строки.
+    private func labeled(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "label == %@", label)
+        ).firstMatch
+    }
+
+    /// Прокрутить страницу до появления элемента: на iPhone блок заметок лежит
+    /// ниже всех дней недели.
+    private func scrollToElement(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<12 where !element.exists {
+            app.windows.firstMatch.swipeUp()
+        }
+    }
+
     /// Текст элемента: на iOS он в `label`, на macOS — в `value`.
     private func text(of element: XCUIElement) -> String {
         element.label.isEmpty ? (element.value as? String ?? "") : element.label
@@ -109,6 +141,60 @@ final class PlannerUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["addLessonButton"].waitForExistence(timeout: 5))
     }
+
+    /// Отметка «Каждую неделю» в записи: занятие появляется и на следующей
+    /// неделе, а снятая отметка убирает повторы.
+    func testWeeklyRepeatMarkAddsAndRemovesFutureLessons() {
+        let app = launchApp()
+        tapControl("Календарь", in: app)
+        tapControl("Неделя", in: app)
+
+        app.buttons["addLessonButton"].tap()
+        XCTAssertTrue(app.buttons["saveLessonButton"].waitForExistence(timeout: 5))
+        tapControl("lessonStudentPicker", in: app)
+        tapControl("Тест Ученик", in: app)
+        toggle("lessonWeeklyRepeatSwitch", in: app).tap()
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "Новая запись — еженедельное повторение"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        app.buttons["saveLessonButton"].tap()
+
+        let thisWeekMark = labeled(Self.repeatMarkLabel, in: app)
+        scrollToElement(thisWeekMark, in: app)
+        XCTAssertTrue(thisWeekMark.waitForExistence(timeout: 10),
+                      "Повторяющееся занятие не помечено в дневнике:\n\(app.debugDescription)")
+
+        app.buttons["calendarNextButton"].tap()
+        let nextWeekMark = labeled(Self.repeatMarkLabel, in: app)
+        scrollToElement(nextWeekMark, in: app)
+        XCTAssertTrue(nextWeekMark.waitForExistence(timeout: 10),
+                      "Занятие не повторилось на следующей неделе:\n\(app.debugDescription)")
+
+        // Снимаем отметку у повтора: со следующей недели занятия быть не должно.
+        let repeatedRow = app.staticTexts["Тест Ученик"]
+        scrollToElement(repeatedRow, in: app)
+        XCTAssertTrue(repeatedRow.waitForExistence(timeout: 10), "Повтор не найден в строке дневника")
+        repeatedRow.tap()
+        let repeatSwitch = toggle("lessonWeeklyRepeatSwitch", in: app)
+        XCTAssertTrue(repeatSwitch.waitForExistence(timeout: 10),
+                      "Редактор занятия не открылся:\n\(app.debugDescription)")
+        repeatSwitch.tap()
+        app.buttons["saveLessonButton"].tap()
+
+        XCTAssertTrue(app.buttons["calendarNextButton"].waitForExistence(timeout: 10))
+        app.buttons["calendarNextButton"].tap()
+        XCTAssertFalse(labeled(Self.repeatMarkLabel, in: app).waitForExistence(timeout: 5),
+                       "Повторы не убрались из расписания:\n\(app.debugDescription)")
+        XCTAssertFalse(app.staticTexts["Тест Ученик"].exists,
+                       "Занятие всё ещё повторяется через неделю после снятой отметки")
+    }
+
+    /// Подпись метки повторения: идентификатор строки дневника задаёт блок дня,
+    /// поэтому в дереве доступности метку видно только по подписи.
+    private static let repeatMarkLabel = "Повторяется каждую неделю"
 
     func testCalendarModeNavigation() {
         let app = launchApp()
@@ -227,6 +313,39 @@ final class PlannerUITests: XCTestCase {
             XCTAssertEqual(block.frame.maxY, slotTop + expectedHeight, accuracy: tolerance,
                            "Низ блока выходит за конец урока на \(hour):00")
         }
+    }
+
+    /// Блок «Заметки» на развороте недели: пустой слот открывает редактор, и
+    /// сохранённая заметка появляется в дневнике.
+    func testWeekNoteIsAddedFromDiary() {
+        let app = launchApp()
+        tapControl("Календарь", in: app)
+        tapControl("Неделя", in: app)
+
+        let notes = element("diaryNotesSection", in: app)
+        scrollToElement(notes, in: app)
+        XCTAssertTrue(notes.waitForExistence(timeout: 15),
+                      "Блок «Заметки» не найден:\n\(app.debugDescription)")
+
+        // Свободная строка ищется по подсказке: идентификатор строки перекрыт
+        // идентификатором самого блока.
+        let emptySlot = labeled("Добавить заметку", in: app)
+        scrollToElement(emptySlot, in: app)
+        XCTAssertTrue(emptySlot.waitForExistence(timeout: 20),
+                      "В блоке заметок нет свободной строки:\n\(app.debugDescription)")
+        emptySlot.tap()
+
+        let field = inputField("weekNoteTextField", in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10),
+                      "Редактор заметки не открылся:\n\(app.debugDescription)")
+        field.tap()
+        field.typeText("Заказать тетради")
+        app.buttons["saveWeekNoteButton"].tap()
+
+        let saved = app.staticTexts["Заказать тетради"]
+        scrollToElement(saved, in: app)
+        XCTAssertTrue(saved.waitForExistence(timeout: 10),
+                      "Заметка не появилась в блоке:\n\(app.debugDescription)")
     }
 
     func testEarningsScreenShowsTotal() {

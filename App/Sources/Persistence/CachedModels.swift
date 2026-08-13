@@ -62,6 +62,7 @@ final class CachedLesson {
     var durationMinutes: Int
     var isPaid: Bool
     var note: String?
+    var seriesId: UUID?
     var createdAt: Date
 
     init(_ lesson: Lesson) {
@@ -71,6 +72,7 @@ final class CachedLesson {
         self.durationMinutes = lesson.durationMinutes
         self.isPaid = lesson.isPaid
         self.note = lesson.note
+        self.seriesId = lesson.seriesId
         self.createdAt = lesson.createdAt
     }
 
@@ -80,6 +82,7 @@ final class CachedLesson {
         durationMinutes = lesson.durationMinutes
         isPaid = lesson.isPaid
         note = lesson.note
+        seriesId = lesson.seriesId
         createdAt = lesson.createdAt
     }
 
@@ -91,6 +94,7 @@ final class CachedLesson {
             durationMinutes: durationMinutes,
             isPaid: isPaid,
             note: note,
+            seriesId: seriesId,
             createdAt: createdAt
         )
     }
@@ -173,5 +177,31 @@ final class CachedPersonalTask {
             colorHex: colorHex,
             createdAt: createdAt
         )
+    }
+}
+
+/// Локальная (кэш) модель заметки недели для офлайн-чтения.
+@Model
+final class CachedWeekNote {
+    @Attribute(.unique) var id: UUID
+    var weekStart: Date
+    var text: String
+    var createdAt: Date
+
+    init(_ note: WeekNote) {
+        self.id = note.id
+        self.weekStart = note.weekStart
+        self.text = note.text
+        self.createdAt = note.createdAt
+    }
+
+    func apply(_ note: WeekNote) {
+        weekStart = note.weekStart
+        text = note.text
+        createdAt = note.createdAt
+    }
+
+    func toDomain() -> WeekNote {
+        WeekNote(id: id, weekStart: weekStart, text: text, createdAt: createdAt)
     }
 }

@@ -65,8 +65,13 @@ enum DemoMode {
                          note: "Темы и материалы")
         ]
 
+        let notes: [WeekNote] = [
+            WeekNote(weekStart: weekStart, text: "Заказать рабочие тетради на сентябрь"),
+            WeekNote(weekStart: weekStart, text: "Позвонить маме Егора по расписанию")
+        ]
+
         let remote = DemoRemoteStore()
-        await remote.seed(students: students, lessons: lessons, tasks: tasks)
+        await remote.seed(students: students, lessons: lessons, tasks: tasks, notes: notes)
         // Кэш демо-режима тоже в памяти: демонстрационные ученики не должны
         // оседать в базе устройства и всплывать потом у реального пользователя.
         env.connectInMemory(remote: remote)
@@ -82,26 +87,45 @@ actor DemoRemoteStore: RemoteStore {
     private var students: [UUID: Student] = [:]
     private var lessons: [UUID: Lesson] = [:]
     private var tasks: [UUID: PersonalTask] = [:]
+    private var weekNotes: [UUID: WeekNote] = [:]
 
-    func seed(students: [Student], lessons: [Lesson], tasks: [PersonalTask]) {
+    func seed(students: [Student], lessons: [Lesson], tasks: [PersonalTask], notes: [WeekNote]) {
         self.students = Dictionary(uniqueKeysWithValues: students.map { ($0.id, $0) })
         self.lessons = Dictionary(uniqueKeysWithValues: lessons.map { ($0.id, $0) })
         self.tasks = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) })
+        self.weekNotes = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
     }
 
     func fetchStudents() async throws -> [Student] { Array(students.values) }
     func upsertStudent(_ student: Student) async throws { students[student.id] = student }
-    func deleteStudent(id: UUID) async throws { students[id] = nil }
+
+    /// Занятия ученика уходят вместе с ним — как каскад внешнего ключа в базе.
+    func deleteStudent(id: UUID) async throws {
+        students[id] = nil
+        lessons = lessons.filter { $0.value.studentId != id }
+    }
 
     func fetchLessons(in range: DateRange) async throws -> [Lesson] {
         CalendarRange.lessons(Array(lessons.values), in: range)
     }
     func upsertLesson(_ lesson: Lesson) async throws { lessons[lesson.id] = lesson }
+    func upsertLessons(_ lessons: [Lesson]) async throws {
+        for lesson in lessons { self.lessons[lesson.id] = lesson }
+    }
     func deleteLesson(id: UUID) async throws { lessons[id] = nil }
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        lessons = lessons.filter { !($0.value.seriesId == seriesId && $0.value.startAt > date) }
+    }
 
     func fetchTasks(in range: DateRange) async throws -> [PersonalTask] {
         CalendarRange.tasks(Array(tasks.values), in: range)
     }
     func upsertTask(_ task: PersonalTask) async throws { tasks[task.id] = task }
     func deleteTask(id: UUID) async throws { tasks[id] = nil }
+
+    func fetchWeekNotes(weekStart: Date) async throws -> [WeekNote] {
+        CalendarRange.weekNotes(Array(weekNotes.values), weekStart: weekStart)
+    }
+    func upsertWeekNote(_ note: WeekNote) async throws { weekNotes[note.id] = note }
+    func deleteWeekNote(id: UUID) async throws { weekNotes[id] = nil }
 }

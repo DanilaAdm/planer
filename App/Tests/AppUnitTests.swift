@@ -34,10 +34,26 @@ final class AppUnitTests: XCTestCase {
             startAt: Date(timeIntervalSince1970: 1_700_000_000),
             durationMinutes: 90,
             isPaid: true,
-            note: "Тема"
+            note: "Тема",
+            seriesId: UUID()
         )
         let cached = CachedLesson(lesson)
         XCTAssertEqual(cached.toDomain(), lesson)
+        XCTAssertTrue(cached.toDomain().repeatsWeekly)
+    }
+
+    /// Разовое занятие остаётся разовым и после кэширования.
+    func testCachedSingleLessonHasNoSeries() {
+        let lesson = Lesson(studentId: UUID(), startAt: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertNil(CachedLesson(lesson).toDomain().seriesId)
+    }
+
+    func testCachedWeekNoteRoundTrip() {
+        let note = WeekNote(
+            weekStart: Calendar.current.startOfDay(for: Date()),
+            text: "Заказать тетради"
+        )
+        XCTAssertEqual(CachedWeekNote(note).toDomain(), note)
     }
 
     func testReadableTextContrast() {

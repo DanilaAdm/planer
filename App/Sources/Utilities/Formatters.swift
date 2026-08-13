@@ -44,6 +44,14 @@ enum Formatters {
         return f
     }()
 
+    /// Технический ключ дня (`2026-08-13`) — для идентификаторов в тестах.
+    static let dayKey: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
     static let monthYear: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")

@@ -9,6 +9,8 @@ final class AppEnvironment: ObservableObject {
     @Published var students: [Student] = []
     @Published var lessons: [Lesson] = []
     @Published var personalTasks: [PersonalTask] = []
+    /// Заметки недели, показанной в календаре.
+    @Published var weekNotes: [WeekNote] = []
     @Published var selectedDate: Date = Date()
     @Published var isSyncing = false
     @Published var isOnline = true
@@ -34,6 +36,9 @@ final class AppEnvironment: ObservableObject {
     private let localStore: SwiftDataLocalStore
     private var repository: PlannerRepository?
     private var currentRange: DateRange?
+    /// Неделя, заметки которой загружены. Диапазон календаря для этого не годится:
+    /// в режимах месяца и дня он не совпадает с неделей разворота дневника.
+    private var currentWeekStart: Date?
 
     /// Кому принадлежит содержимое локального кэша.
     private static let cacheOwnerKey = "cached_owner_id"
@@ -74,6 +79,7 @@ final class AppEnvironment: ObservableObject {
         students = []
         lessons = []
         personalTasks = []
+        weekNotes = []
     }
 
     var hasRepository: Bool { repository != nil }
@@ -86,6 +92,7 @@ final class AppEnvironment: ObservableObject {
         students = []
         lessons = []
         personalTasks = []
+        weekNotes = []
         defaults.set(ownerId.uuidString, forKey: Self.cacheOwnerKey)
     }
 
@@ -150,7 +157,18 @@ final class AppEnvironment: ObservableObject {
         case .week: range = CalendarRange.week(containing: referenceDate, calendar: calendar)
         case .day: range = CalendarRange.day(containing: referenceDate, calendar: calendar)
         }
+        currentWeekStart = WeekNote.weekStart(containing: referenceDate, calendar: calendar)
         await loadLessons(in: range)
+    }
+
+    /// Перечитать показанный период после правки. Без открытого календаря
+    /// перечитывать нечего — остаётся обновить состояние синхронизации.
+    private func reloadCalendar() async {
+        if let range = currentRange {
+            await loadLessons(in: range)
+        } else {
+            await refreshSyncState()
+        }
     }
 
     private func loadLessons(in range: DateRange) async {
@@ -159,6 +177,9 @@ final class AppEnvironment: ObservableObject {
         isSyncing = true
         lessons = await repository.lessons(in: range)
         personalTasks = await repository.tasks(in: range)
+        if let currentWeekStart {
+            weekNotes = await repository.weekNotes(weekStart: currentWeekStart, calendar: calendar)
+        }
         await refreshSyncState()
         isSyncing = false
     }
@@ -192,13 +213,33 @@ final class AppEnvironment: ObservableObject {
     func saveLesson(_ lesson: Lesson) async {
         guard let repository else { return }
         await repository.saveLesson(lesson)
-        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
+        await reloadCalendar()
+    }
+
+    /// Сохранить урок вместе с отметкой «Каждую неделю».
+    ///
+    /// `previousSeriesId` — серия, в которой урок был до правки. Включённая
+    /// отметка раскрывает повторение на год вперёд, снятая убирает повторы,
+    /// начиная со следующей недели; сам урок остаётся в расписании. Поэтому
+    /// отметку можно снять и поставить снова: повторение продолжится с того
+    /// занятия, на котором её вернули.
+    func saveLesson(_ lesson: Lesson, previousSeriesId: UUID?) async {
+        guard let repository else { return }
+        await repository.saveLesson(lesson)
+        if let seriesId = lesson.seriesId, seriesId != previousSeriesId {
+            await repository.saveLessons(
+                LessonRecurrence.followingOccurrences(of: lesson, calendar: calendar)
+            )
+        } else if lesson.seriesId == nil, let previousSeriesId {
+            await repository.cancelLessonSeries(seriesId: previousSeriesId, after: lesson.startAt)
+        }
+        await reloadCalendar()
     }
 
     func deleteLesson(_ lesson: Lesson) async {
         guard let repository else { return }
         await repository.deleteLesson(id: lesson.id)
-        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
+        await reloadCalendar()
     }
 
     /// Переключить отметку «Занятие оплачено».
@@ -237,13 +278,13 @@ final class AppEnvironment: ObservableObject {
     func saveTask(_ task: PersonalTask) async {
         guard let repository else { return }
         await repository.saveTask(task)
-        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
+        await reloadCalendar()
     }
 
     func deleteTask(_ task: PersonalTask) async {
         guard let repository else { return }
         await repository.deleteTask(id: task.id)
-        if let range = currentRange { await loadLessons(in: range) } else { await refreshSyncState() }
+        await reloadCalendar()
     }
 
     /// Переключить отметку «Выполнено» у личной задачи.
@@ -251,6 +292,35 @@ final class AppEnvironment: ObservableObject {
         var updated = task
         updated.isDone.toggle()
         await saveTask(updated)
+    }
+
+    // MARK: - Заметки недели
+
+    /// Заметки недели, в которую попадает день, в порядке добавления.
+    func notes(forWeekOf day: Date) -> [WeekNote] {
+        CalendarRange.weekNotes(weekNotes, weekStart: day, calendar: calendar)
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    func saveWeekNote(_ note: WeekNote) async {
+        guard let repository else { return }
+        await repository.saveWeekNote(note)
+        await reloadWeekNotes()
+    }
+
+    func deleteWeekNote(_ note: WeekNote) async {
+        guard let repository else { return }
+        await repository.deleteWeekNote(id: note.id)
+        await reloadWeekNotes()
+    }
+
+    private func reloadWeekNotes() async {
+        guard let repository, let currentWeekStart else {
+            await refreshSyncState()
+            return
+        }
+        weekNotes = await repository.weekNotes(weekStart: currentWeekStart, calendar: calendar)
+        await refreshSyncState()
     }
 
     /// Загрузить уроки за произвольный диапазон, не меняя текущее состояние календаря

@@ -14,6 +14,7 @@ actor SwiftDataLocalStore: LocalStore {
         try modelContext.delete(model: CachedStudent.self)
         try modelContext.delete(model: CachedLesson.self)
         try modelContext.delete(model: CachedPersonalTask.self)
+        try modelContext.delete(model: CachedWeekNote.self)
         try modelContext.save()
     }
 
@@ -88,6 +89,24 @@ actor SwiftDataLocalStore: LocalStore {
         try modelContext.save()
     }
 
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        let descriptor = FetchDescriptor<CachedLesson>(
+            predicate: #Predicate { $0.seriesId == seriesId && $0.startAt > date }
+        )
+        for item in try modelContext.fetch(descriptor) {
+            modelContext.delete(item)
+        }
+        try modelContext.save()
+    }
+
+    func deleteLessons(studentId: UUID) async throws {
+        let descriptor = FetchDescriptor<CachedLesson>(predicate: #Predicate { $0.studentId == studentId })
+        for item in try modelContext.fetch(descriptor) {
+            modelContext.delete(item)
+        }
+        try modelContext.save()
+    }
+
     private func upsertLessonInternal(_ lesson: Lesson, existing: [CachedLesson]) throws {
         if let match = existing.first(where: { $0.id == lesson.id }) {
             match.apply(lesson)
@@ -130,6 +149,43 @@ actor SwiftDataLocalStore: LocalStore {
             match.apply(task)
         } else {
             modelContext.insert(CachedPersonalTask(task))
+        }
+    }
+
+    // MARK: - Заметки недели
+
+    func loadWeekNotes() async throws -> [WeekNote] {
+        let descriptor = FetchDescriptor<CachedWeekNote>()
+        return try modelContext.fetch(descriptor).map { $0.toDomain() }
+    }
+
+    func saveWeekNotes(_ notes: [WeekNote]) async throws {
+        let existing = try modelContext.fetch(FetchDescriptor<CachedWeekNote>())
+        for note in notes {
+            try upsertWeekNoteInternal(note, existing: existing)
+        }
+        try modelContext.save()
+    }
+
+    func upsertWeekNote(_ note: WeekNote) async throws {
+        let existing = try modelContext.fetch(FetchDescriptor<CachedWeekNote>())
+        try upsertWeekNoteInternal(note, existing: existing)
+        try modelContext.save()
+    }
+
+    func deleteWeekNote(id: UUID) async throws {
+        let descriptor = FetchDescriptor<CachedWeekNote>(predicate: #Predicate { $0.id == id })
+        for item in try modelContext.fetch(descriptor) {
+            modelContext.delete(item)
+        }
+        try modelContext.save()
+    }
+
+    private func upsertWeekNoteInternal(_ note: WeekNote, existing: [CachedWeekNote]) throws {
+        if let match = existing.first(where: { $0.id == note.id }) {
+            match.apply(note)
+        } else {
+            modelContext.insert(CachedWeekNote(note))
         }
     }
 }

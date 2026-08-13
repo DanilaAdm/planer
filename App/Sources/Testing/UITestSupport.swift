@@ -68,21 +68,39 @@ actor InMemoryRemoteStore: RemoteStore {
     private var students: [UUID: Student] = [:]
     private var lessons: [UUID: Lesson] = [:]
     private var tasks: [UUID: PersonalTask] = [:]
+    private var weekNotes: [UUID: WeekNote] = [:]
 
     func fetchStudents() async throws -> [Student] { Array(students.values) }
     func upsertStudent(_ student: Student) async throws { students[student.id] = student }
-    func deleteStudent(id: UUID) async throws { students[id] = nil }
+
+    /// Занятия ученика уходят вместе с ним — как каскад внешнего ключа в базе.
+    func deleteStudent(id: UUID) async throws {
+        students[id] = nil
+        lessons = lessons.filter { $0.value.studentId != id }
+    }
 
     func fetchLessons(in range: DateRange) async throws -> [Lesson] {
         CalendarRange.lessons(Array(lessons.values), in: range)
     }
     func upsertLesson(_ lesson: Lesson) async throws { lessons[lesson.id] = lesson }
+    func upsertLessons(_ lessons: [Lesson]) async throws {
+        for lesson in lessons { self.lessons[lesson.id] = lesson }
+    }
     func deleteLesson(id: UUID) async throws { lessons[id] = nil }
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        lessons = lessons.filter { !($0.value.seriesId == seriesId && $0.value.startAt > date) }
+    }
 
     func fetchTasks(in range: DateRange) async throws -> [PersonalTask] {
         CalendarRange.tasks(Array(tasks.values), in: range)
     }
     func upsertTask(_ task: PersonalTask) async throws { tasks[task.id] = task }
     func deleteTask(id: UUID) async throws { tasks[id] = nil }
+
+    func fetchWeekNotes(weekStart: Date) async throws -> [WeekNote] {
+        CalendarRange.weekNotes(Array(weekNotes.values), weekStart: weekStart)
+    }
+    func upsertWeekNote(_ note: WeekNote) async throws { weekNotes[note.id] = note }
+    func deleteWeekNote(id: UUID) async throws { weekNotes[id] = nil }
 }
 #endif

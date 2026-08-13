@@ -79,6 +79,10 @@ public actor PlannerRepository {
     @discardableResult
     public func deleteStudent(id: UUID) async -> Bool {
         try? await local.deleteStudent(id: id)
+        // Занятия ученика уходят вместе с ним: на сервере это делает каскад
+        // внешнего ключа, в кэше — мы сами, иначе офлайн они остались бы в
+        // расписании как записи без имени.
+        try? await local.deleteLessons(studentId: id)
         do {
             try await remote.deleteStudent(id: id)
             serverReachable = true
@@ -119,6 +123,27 @@ public actor PlannerRepository {
         }
     }
 
+    /// Сохранить серию еженедельных повторений одним обменом с сервером.
+    @discardableResult
+    public func saveLessons(_ lessons: [Lesson]) async -> Bool {
+        guard !lessons.isEmpty else { return true }
+        try? await local.saveLessons(lessons)
+        do {
+            try await remote.upsertLessons(lessons)
+            serverReachable = true
+            return true
+        } catch {
+            serverReachable = false
+            // В очередь занятия встают по одному: досылка умеет отправлять
+            // только отдельные сущности, зато порядок и вытеснение работают
+            // так же, как для любой другой правки.
+            for lesson in lessons {
+                await enqueue(.upsertLesson, entityId: lesson.id, value: lesson)
+            }
+            return false
+        }
+    }
+
     @discardableResult
     public func deleteLesson(id: UUID) async -> Bool {
         try? await local.deleteLesson(id: id)
@@ -129,6 +154,22 @@ public actor PlannerRepository {
         } catch {
             serverReachable = false
             await enqueue(.deleteLesson, entityId: id, value: Lesson?.none)
+            return false
+        }
+    }
+
+    /// Снять повторы серии, начинающиеся позже `date`: отметку «каждую неделю»
+    /// выключили, и со следующей недели занятия в расписании быть не должно.
+    @discardableResult
+    public func cancelLessonSeries(seriesId: UUID, after date: Date) async -> Bool {
+        try? await local.deleteLessons(seriesId: seriesId, after: date)
+        do {
+            try await remote.deleteLessons(seriesId: seriesId, after: date)
+            serverReachable = true
+            return true
+        } catch {
+            serverReachable = false
+            await enqueue(.cancelLessonSeries, entityId: seriesId, value: LessonSeriesCancellation(after: date))
             return false
         }
     }
@@ -172,6 +213,50 @@ public actor PlannerRepository {
         } catch {
             serverReachable = false
             await enqueue(.deleteTask, entityId: id, value: PersonalTask?.none)
+            return false
+        }
+    }
+
+    // MARK: - Заметки недели
+
+    public func weekNotes(weekStart: Date, calendar: Calendar = .current) async -> [WeekNote] {
+        do {
+            let remoteNotes = try await remote.fetchWeekNotes(weekStart: weekStart)
+            serverReachable = true
+            try? await local.saveWeekNotes(remoteNotes)
+            return remoteNotes.sorted { $0.createdAt < $1.createdAt }
+        } catch {
+            serverReachable = false
+            let cached = (try? await local.loadWeekNotes()) ?? []
+            return CalendarRange.weekNotes(cached, weekStart: weekStart, calendar: calendar)
+                .sorted { $0.createdAt < $1.createdAt }
+        }
+    }
+
+    @discardableResult
+    public func saveWeekNote(_ note: WeekNote) async -> Bool {
+        try? await local.upsertWeekNote(note)
+        do {
+            try await remote.upsertWeekNote(note)
+            serverReachable = true
+            return true
+        } catch {
+            serverReachable = false
+            await enqueue(.upsertWeekNote, entityId: note.id, value: note)
+            return false
+        }
+    }
+
+    @discardableResult
+    public func deleteWeekNote(id: UUID) async -> Bool {
+        try? await local.deleteWeekNote(id: id)
+        do {
+            try await remote.deleteWeekNote(id: id)
+            serverReachable = true
+            return true
+        } catch {
+            serverReachable = false
+            await enqueue(.deleteWeekNote, entityId: id, value: WeekNote?.none)
             return false
         }
     }
@@ -228,6 +313,9 @@ public actor PlannerRepository {
         for task in (try? await local.loadTasks()) ?? [] {
             await enqueue(.upsertTask, entityId: task.id, value: task)
         }
+        for note in (try? await local.loadWeekNotes()) ?? [] {
+            await enqueue(.upsertWeekNote, entityId: note.id, value: note)
+        }
         return await flushPending()
     }
 
@@ -243,11 +331,19 @@ public actor PlannerRepository {
             try await remote.upsertLesson(lesson)
         case .deleteLesson:
             try await remote.deleteLesson(id: operation.entityId)
+        case .cancelLessonSeries:
+            guard let cancellation = decode(LessonSeriesCancellation.self, from: operation.payload) else { return }
+            try await remote.deleteLessons(seriesId: operation.entityId, after: cancellation.after)
         case .upsertTask:
             guard let task = decode(PersonalTask.self, from: operation.payload) else { return }
             try await remote.upsertTask(task)
         case .deleteTask:
             try await remote.deleteTask(id: operation.entityId)
+        case .upsertWeekNote:
+            guard let note = decode(WeekNote.self, from: operation.payload) else { return }
+            try await remote.upsertWeekNote(note)
+        case .deleteWeekNote:
+            try await remote.deleteWeekNote(id: operation.entityId)
         }
     }
 

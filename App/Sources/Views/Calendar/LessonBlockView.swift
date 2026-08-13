@@ -54,6 +54,7 @@ struct LessonBlockView: View {
             HStack(spacing: 4) {
                 title(font: .caption2.bold())
                 Spacer(minLength: 0)
+                if lesson.repeatsWeekly { WeeklyRepeatMark() }
                 if isEnding { LastLessonBadge() }
                 // Капсула оплаты в короткий слот не помещается — статус показываем иконкой.
                 Image(systemName: lesson.isPaid ? "checkmark.seal.fill" : "circle")
@@ -65,6 +66,7 @@ struct LessonBlockView: View {
                 HStack(spacing: 4) {
                     title(font: .caption.bold())
                     Spacer(minLength: 0)
+                    if lesson.repeatsWeekly { WeeklyRepeatMark() }
                     if isEnding { LastLessonBadge() }
                 }
                 HStack(spacing: 6) {

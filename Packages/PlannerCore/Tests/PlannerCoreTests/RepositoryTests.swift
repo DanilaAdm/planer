@@ -6,6 +6,7 @@ private actor MockRemote: RemoteStore {
     var students: [UUID: Student] = [:]
     var lessons: [UUID: Lesson] = [:]
     var tasks: [UUID: PersonalTask] = [:]
+    var weekNotes: [UUID: WeekNote] = [:]
     var shouldFail = false
 
     func setShouldFail(_ value: Bool) { shouldFail = value }
@@ -34,9 +35,17 @@ private actor MockRemote: RemoteStore {
         if shouldFail { throw Offline() }
         lessons[lesson.id] = lesson
     }
+    func upsertLessons(_ lessons: [Lesson]) async throws {
+        if shouldFail { throw Offline() }
+        for lesson in lessons { self.lessons[lesson.id] = lesson }
+    }
     func deleteLesson(id: UUID) async throws {
         if shouldFail { throw Offline() }
         lessons[id] = nil
+    }
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        if shouldFail { throw Offline() }
+        lessons = lessons.filter { !($0.value.seriesId == seriesId && $0.value.startAt > date) }
     }
     func fetchTasks(in range: DateRange) async throws -> [PersonalTask] {
         if shouldFail { throw Offline() }
@@ -50,17 +59,35 @@ private actor MockRemote: RemoteStore {
         if shouldFail { throw Offline() }
         tasks[id] = nil
     }
+    func fetchWeekNotes(weekStart: Date) async throws -> [WeekNote] {
+        if shouldFail { throw Offline() }
+        return CalendarRange.weekNotes(
+            Array(weekNotes.values),
+            weekStart: weekStart,
+            calendar: TestSupport.utcCalendar
+        )
+    }
+    func upsertWeekNote(_ note: WeekNote) async throws {
+        if shouldFail { throw Offline() }
+        weekNotes[note.id] = note
+    }
+    func deleteWeekNote(id: UUID) async throws {
+        if shouldFail { throw Offline() }
+        weekNotes[id] = nil
+    }
 }
 
 private actor MockLocal: LocalStore {
     var students: [UUID: Student] = [:]
     var lessons: [UUID: Lesson] = [:]
     var tasks: [UUID: PersonalTask] = [:]
+    var weekNotes: [UUID: WeekNote] = [:]
 
     func clearAll() async throws {
         students.removeAll()
         lessons.removeAll()
         tasks.removeAll()
+        weekNotes.removeAll()
     }
 
     func loadStudents() async throws -> [Student] { Array(students.values) }
@@ -72,10 +99,16 @@ private actor MockLocal: LocalStore {
 
     func loadLessons() async throws -> [Lesson] { Array(lessons.values) }
     func saveLessons(_ lessons: [Lesson]) async throws {
-        self.lessons = Dictionary(uniqueKeysWithValues: lessons.map { ($0.id, $0) })
+        for lesson in lessons { self.lessons[lesson.id] = lesson }
     }
     func upsertLesson(_ lesson: Lesson) async throws { lessons[lesson.id] = lesson }
     func deleteLesson(id: UUID) async throws { lessons[id] = nil }
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        lessons = lessons.filter { !($0.value.seriesId == seriesId && $0.value.startAt > date) }
+    }
+    func deleteLessons(studentId: UUID) async throws {
+        lessons = lessons.filter { $0.value.studentId != studentId }
+    }
 
     func loadTasks() async throws -> [PersonalTask] { Array(tasks.values) }
     func saveTasks(_ tasks: [PersonalTask]) async throws {
@@ -83,6 +116,13 @@ private actor MockLocal: LocalStore {
     }
     func upsertTask(_ task: PersonalTask) async throws { tasks[task.id] = task }
     func deleteTask(id: UUID) async throws { tasks[id] = nil }
+
+    func loadWeekNotes() async throws -> [WeekNote] { Array(weekNotes.values) }
+    func saveWeekNotes(_ notes: [WeekNote]) async throws {
+        for note in notes { weekNotes[note.id] = note }
+    }
+    func upsertWeekNote(_ note: WeekNote) async throws { weekNotes[note.id] = note }
+    func deleteWeekNote(id: UUID) async throws { weekNotes[id] = nil }
 }
 
 final class RepositoryTests: XCTestCase {
@@ -170,6 +210,210 @@ final class RepositoryTests: XCTestCase {
         XCTAssertTrue(ok)
         let cached = try? await local.loadLessons()
         XCTAssertEqual(cached?.count, 0)
+    }
+
+    // MARK: - Еженедельное повторение
+
+    /// Серия уезжает на сервер одним обменом: 52 отдельных запроса заметно
+    /// задерживали бы сохранение записи.
+    func testSaveLessonSeriesStoresEveryOccurrence() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let lesson = Lesson(
+            studentId: UUID(),
+            startAt: TestSupport.date(2026, 3, 2, 15),
+            seriesId: UUID()
+        )
+        let repo = PlannerRepository(remote: remote, local: local)
+
+        await repo.saveLesson(lesson)
+        let synced = await repo.saveLessons(
+            LessonRecurrence.followingOccurrences(of: lesson, calendar: TestSupport.utcCalendar)
+        )
+
+        XCTAssertTrue(synced)
+        let cached = try? await local.loadLessons()
+        XCTAssertEqual(cached?.count, 53, "Занятие и 52 повтора должны лежать и в кэше")
+        let year = DateRange(start: TestSupport.date(2026, 3, 2), end: TestSupport.date(2027, 3, 2))
+        let onServer = try? await remote.fetchLessons(in: year)
+        XCTAssertEqual(onServer?.count, 53)
+    }
+
+    /// Снятая отметка «Каждую неделю» убирает повторы со следующей недели,
+    /// а само занятие остаётся в расписании.
+    func testCancelSeriesKeepsLessonAndRemovesLaterOccurrences() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let seriesId = UUID()
+        let studentId = UUID()
+        let lessons = (0..<4).map { week in
+            Lesson(
+                studentId: studentId,
+                startAt: TestSupport.date(2026, 3, 2 + week * 7, 15),
+                seriesId: seriesId
+            )
+        }
+        for lesson in lessons { await remote.seedLesson(lesson) }
+        try? await local.saveLessons(lessons)
+        let repo = PlannerRepository(remote: remote, local: local)
+
+        let stopped = await repo.cancelLessonSeries(seriesId: seriesId, after: lessons[1].startAt)
+
+        XCTAssertTrue(stopped)
+        let year = DateRange(start: TestSupport.date(2026, 3, 2), end: TestSupport.date(2027, 3, 2))
+        let remaining = try? await remote.fetchLessons(in: year)
+        XCTAssertEqual(remaining?.map(\.startAt).sorted(), [lessons[0].startAt, lessons[1].startAt])
+        let cached = try? await local.loadLessons()
+        XCTAssertEqual(cached?.count, 2)
+    }
+
+    func testOfflineSeriesCancellationReachesServerAfterFlush() async {
+        let remote = MockRemote()
+        let seriesId = UUID()
+        let studentId = UUID()
+        let first = Lesson(studentId: studentId, startAt: TestSupport.date(2026, 3, 2, 15), seriesId: seriesId)
+        let second = Lesson(studentId: studentId, startAt: TestSupport.date(2026, 3, 9, 15), seriesId: seriesId)
+        await remote.seedLesson(first)
+        await remote.seedLesson(second)
+        let repo = makeRepository(remote: remote, outbox: InMemoryOutboxStore(), owner: UUID())
+
+        await remote.setShouldFail(true)
+        let stopped = await repo.cancelLessonSeries(seriesId: seriesId, after: first.startAt)
+        XCTAssertFalse(stopped)
+        let queued = await repo.pendingCount()
+        XCTAssertEqual(queued, 1, "Отмена без сети должна попасть в очередь, а не потеряться")
+
+        await remote.setShouldFail(false)
+        let flushed = await repo.flushPending()
+        XCTAssertTrue(flushed)
+
+        let year = DateRange(start: TestSupport.date(2026, 3, 2), end: TestSupport.date(2027, 3, 2))
+        let remaining = try? await remote.fetchLessons(in: year)
+        XCTAssertEqual(remaining?.map(\.startAt), [first.startAt])
+    }
+
+    /// Без сети серия обязана целиком лечь в очередь: иначе часть занятий
+    /// осталась бы только на устройстве.
+    func testOfflineSeriesIsQueuedEntirely() async {
+        let remote = MockRemote()
+        let repo = makeRepository(remote: remote, outbox: InMemoryOutboxStore(), owner: UUID())
+        let lesson = Lesson(studentId: UUID(), startAt: TestSupport.date(2026, 3, 2, 15), seriesId: UUID())
+        await remote.setShouldFail(true)
+
+        let synced = await repo.saveLessons(
+            LessonRecurrence.followingOccurrences(of: lesson, weeks: 3, calendar: TestSupport.utcCalendar)
+        )
+
+        XCTAssertFalse(synced)
+        let queued = await repo.pendingCount()
+        XCTAssertEqual(queued, 3)
+    }
+
+    /// Удалённый ученик уходит из расписания вместе со своими занятиями: на
+    /// сервере это делает каскад, в кэше — репозиторий.
+    func testDeletingStudentClearsCachedLessons() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let student = TestSupport.makeStudent(name: "Ушёл")
+        let other = TestSupport.makeStudent(name: "Остался")
+        try? await local.saveStudents([student, other])
+        try? await local.saveLessons([
+            Lesson(studentId: student.id, startAt: TestSupport.date(2026, 3, 2, 10)),
+            Lesson(studentId: student.id, startAt: TestSupport.date(2026, 3, 9, 10), seriesId: UUID()),
+            Lesson(studentId: other.id, startAt: TestSupport.date(2026, 3, 2, 12))
+        ])
+
+        let repo = PlannerRepository(remote: remote, local: local)
+        await repo.deleteStudent(id: student.id)
+
+        let cached = try? await local.loadLessons()
+        XCTAssertEqual(cached?.map(\.studentId), [other.id])
+    }
+
+    // MARK: - Заметки недели
+
+    func testWeekNotesFromRemoteUpdateCache() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let weekStart = TestSupport.date(2026, 3, 2)
+        try? await remote.upsertWeekNote(WeekNote(weekStart: weekStart, text: "Купить бумагу"))
+
+        let repo = PlannerRepository(remote: remote, local: local)
+        let result = await repo.weekNotes(weekStart: weekStart, calendar: TestSupport.utcCalendar)
+
+        XCTAssertEqual(result.map(\.text), ["Купить бумагу"])
+        let cached = try? await local.loadWeekNotes()
+        XCTAssertEqual(cached?.count, 1)
+    }
+
+    /// Без связи показываются заметки нужной недели из кэша, а не всё подряд.
+    func testWeekNotesFallBackToCacheOfThatWeekWhenOffline() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let weekStart = TestSupport.date(2026, 3, 2)
+        let nextWeek = TestSupport.date(2026, 3, 9)
+        try? await local.saveWeekNotes([
+            WeekNote(weekStart: weekStart, text: "Эта неделя"),
+            WeekNote(weekStart: nextWeek, text: "Следующая неделя")
+        ])
+        await remote.setShouldFail(true)
+
+        let repo = PlannerRepository(remote: remote, local: local)
+        let result = await repo.weekNotes(weekStart: weekStart, calendar: TestSupport.utcCalendar)
+
+        XCTAssertEqual(result.map(\.text), ["Эта неделя"])
+    }
+
+    func testOfflineWeekNoteIsQueuedAndSentWhenBackOnline() async {
+        let remote = MockRemote()
+        let outbox = InMemoryOutboxStore()
+        let repo = makeRepository(remote: remote, outbox: outbox, owner: UUID())
+        let weekStart = TestSupport.date(2026, 3, 2)
+        await remote.setShouldFail(true)
+
+        let synced = await repo.saveWeekNote(WeekNote(weekStart: weekStart, text: "Без интернета"))
+        XCTAssertFalse(synced)
+        var queued = await repo.pendingCount()
+        XCTAssertEqual(queued, 1, "Заметка без сети должна попасть в очередь, а не потеряться")
+
+        await remote.setShouldFail(false)
+        let flushed = await repo.flushPending()
+
+        XCTAssertTrue(flushed)
+        queued = await repo.pendingCount()
+        XCTAssertEqual(queued, 0)
+        let onServer = try? await remote.fetchWeekNotes(weekStart: weekStart)
+        XCTAssertEqual(onServer?.map(\.text), ["Без интернета"])
+    }
+
+    func testOfflineWeekNoteDeleteReachesServerAfterFlush() async {
+        let remote = MockRemote()
+        let weekStart = TestSupport.date(2026, 3, 2)
+        let note = WeekNote(weekStart: weekStart, text: "Лишняя")
+        try? await remote.upsertWeekNote(note)
+        let repo = makeRepository(remote: remote, outbox: InMemoryOutboxStore(), owner: UUID())
+
+        await remote.setShouldFail(true)
+        await repo.deleteWeekNote(id: note.id)
+        await remote.setShouldFail(false)
+        await repo.flushPending()
+
+        let remaining = try? await remote.fetchWeekNotes(weekStart: weekStart)
+        XCTAssertEqual(remaining?.count, 0)
+    }
+
+    func testUploadLocalCachePushesWeekNotes() async {
+        let remote = MockRemote()
+        let local = MockLocal()
+        let weekStart = TestSupport.date(2026, 3, 2)
+        try? await local.saveWeekNotes([WeekNote(weekStart: weekStart, text: "Только на устройстве")])
+
+        let repo = makeRepository(remote: remote, local: local, outbox: InMemoryOutboxStore(), owner: UUID())
+        let uploaded = await repo.uploadLocalCache()
+
+        XCTAssertTrue(uploaded)
+        let onServer = try? await remote.fetchWeekNotes(weekStart: weekStart)
+        XCTAssertEqual(onServer?.map(\.text), ["Только на устройстве"])
     }
 
     // MARK: - Доступность сервера

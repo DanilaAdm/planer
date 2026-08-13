@@ -58,4 +58,17 @@ public enum CalendarRange {
     public static func tasks(_ tasks: [PersonalTask], in range: DateRange) -> [PersonalTask] {
         tasks.filter { range.contains($0.scheduledAt) }
     }
+
+    /// Отфильтровать заметки, относящиеся к неделе, которая начинается `weekStart`.
+    ///
+    /// Сравниваются именно недели, а не сами даты: заметка, заведённая в другом
+    /// часовом поясе, всё равно относится к своей календарной неделе.
+    public static func weekNotes(
+        _ notes: [WeekNote],
+        weekStart: Date,
+        calendar: Calendar = .current
+    ) -> [WeekNote] {
+        let range = week(containing: weekStart, calendar: calendar)
+        return notes.filter { range.contains(week(containing: $0.weekStart, calendar: calendar).start) }
+    }
 }

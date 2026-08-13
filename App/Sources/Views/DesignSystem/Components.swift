@@ -229,6 +229,36 @@ struct LastLessonBadge: View {
     }
 }
 
+/// Метка «занятие повторяется каждую неделю» — та же отметка, что стоит в
+/// редакторе записи. Единый знак повторения во всех разделах приложения.
+struct WeeklyRepeatMark: View {
+    /// Подпись рядом с иконкой. В тесных местах (строка дневника, блок
+    /// календаря) не задаётся — там метка остаётся одной иконкой.
+    var title: String?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "repeat")
+                .font(.system(size: 9, weight: .bold))
+            if let title {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, title == nil ? 5 : Theme.Spacing.sm)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous).fill(Theme.accent.opacity(0.14))
+        )
+        .fixedSize()
+        .accessibilityElement()
+        .accessibilityLabel(title ?? "Повторяется каждую неделю")
+        .accessibilityIdentifier("weeklyRepeatMark")
+    }
+}
+
 /// Выделенное значение (деньги / счётчики).
 struct ValueLabel: View {
     let text: String

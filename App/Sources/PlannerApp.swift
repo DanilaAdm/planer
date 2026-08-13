@@ -15,13 +15,15 @@ struct PlannerApp: App {
         let container: ModelContainer
         do {
             container = try ModelContainer(
-                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self, PendingChange.self
+                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self,
+                CachedWeekNote.self, PendingChange.self
             )
         } catch {
             // В крайнем случае используем БД в памяти, чтобы приложение запустилось.
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
             container = try! ModelContainer(
-                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self, PendingChange.self,
+                for: CachedStudent.self, CachedLesson.self, CachedPersonalTask.self,
+                CachedWeekNote.self, PendingChange.self,
                 configurations: config
             )
         }

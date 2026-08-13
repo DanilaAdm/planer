@@ -10,11 +10,13 @@ actor InMemoryLocalStore: LocalStore {
     private var students: [UUID: Student] = [:]
     private var lessons: [UUID: Lesson] = [:]
     private var tasks: [UUID: PersonalTask] = [:]
+    private var weekNotes: [UUID: WeekNote] = [:]
 
     func clearAll() async throws {
         students.removeAll()
         lessons.removeAll()
         tasks.removeAll()
+        weekNotes.removeAll()
     }
 
     // MARK: - Ученики
@@ -39,6 +41,14 @@ actor InMemoryLocalStore: LocalStore {
     func upsertLesson(_ lesson: Lesson) async throws { lessons[lesson.id] = lesson }
     func deleteLesson(id: UUID) async throws { lessons[id] = nil }
 
+    func deleteLessons(seriesId: UUID, after date: Date) async throws {
+        lessons = lessons.filter { !($0.value.seriesId == seriesId && $0.value.startAt > date) }
+    }
+
+    func deleteLessons(studentId: UUID) async throws {
+        lessons = lessons.filter { $0.value.studentId != studentId }
+    }
+
     // MARK: - Личные задачи (Планы)
 
     func loadTasks() async throws -> [PersonalTask] { Array(tasks.values) }
@@ -49,4 +59,15 @@ actor InMemoryLocalStore: LocalStore {
 
     func upsertTask(_ task: PersonalTask) async throws { tasks[task.id] = task }
     func deleteTask(id: UUID) async throws { tasks[id] = nil }
+
+    // MARK: - Заметки недели
+
+    func loadWeekNotes() async throws -> [WeekNote] { Array(weekNotes.values) }
+
+    func saveWeekNotes(_ notes: [WeekNote]) async throws {
+        for note in notes { weekNotes[note.id] = note }
+    }
+
+    func upsertWeekNote(_ note: WeekNote) async throws { weekNotes[note.id] = note }
+    func deleteWeekNote(id: UUID) async throws { weekNotes[id] = nil }
 }

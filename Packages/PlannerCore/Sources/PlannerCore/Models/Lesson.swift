@@ -11,6 +11,8 @@ public struct Lesson: Identifiable, Hashable, Codable, Sendable {
     /// Отметка "Занятие оплачено".
     public var isPaid: Bool
     public var note: String?
+    /// Серия еженедельных повторений, в которую входит занятие; `nil` — разовое.
+    public var seriesId: UUID?
     public var createdAt: Date
 
     public init(
@@ -20,6 +22,7 @@ public struct Lesson: Identifiable, Hashable, Codable, Sendable {
         durationMinutes: Int = 60,
         isPaid: Bool = false,
         note: String? = nil,
+        seriesId: UUID? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -28,8 +31,12 @@ public struct Lesson: Identifiable, Hashable, Codable, Sendable {
         self.durationMinutes = max(LessonScheduling.minimumDurationMinutes, durationMinutes)
         self.isPaid = isPaid
         self.note = note
+        self.seriesId = seriesId
         self.createdAt = createdAt
     }
+
+    /// Отметка «повторяется каждую неделю».
+    public var repeatsWeekly: Bool { seriesId != nil }
 
     /// Время окончания урока.
     public var endAt: Date {

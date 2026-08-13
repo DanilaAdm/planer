@@ -121,6 +121,38 @@ final class SupabaseIntegrationTests: XCTestCase {
                        start.timeIntervalSince1970, accuracy: 1.0)
     }
 
+    /// Еженедельное повторение на настоящем сервере: серия уезжает одним
+    /// запросом, а снятая отметка убирает только будущие повторы.
+    ///
+    /// Заодно проверяет, что миграция `0005_lesson_series.sql` выполнена:
+    /// без колонки `series_id` сохранение занятия отвалится с ошибкой PostgREST.
+    func testWeeklySeriesSurvivesRoundTripThroughServer() async throws {
+        try await signUpFreshAccount()
+        let student = Student(name: "Ученик серии", pricePerLesson: 1000)
+        try await store.upsertStudent(student)
+
+        let start = Date().addingTimeInterval(3600)
+        let first = Lesson(studentId: student.id, startAt: start, seriesId: UUID())
+        let seriesId = try XCTUnwrap(first.seriesId)
+        try await store.upsertLesson(first)
+        try await store.upsertLessons(
+            LessonRecurrence.followingOccurrences(of: first, weeks: 3, calendar: .current)
+        )
+
+        let range = DateRange(
+            start: start.addingTimeInterval(-86_400),
+            end: start.addingTimeInterval(40 * 86_400)
+        )
+        var inSeries = try await store.fetchLessons(in: range).filter { $0.seriesId == seriesId }
+        XCTAssertEqual(inSeries.count, 4, "Серия не доехала до сервера целиком")
+        XCTAssertTrue(inSeries.allSatisfy(\.repeatsWeekly))
+
+        try await store.deleteLessons(seriesId: seriesId, after: start)
+        inSeries = try await store.fetchLessons(in: range).filter { $0.seriesId == seriesId }
+        XCTAssertEqual(inSeries.map(\.id), [first.id],
+                       "Снятая отметка обязана убрать только будущие повторы")
+    }
+
     /// Повторное сохранение не должно плодить дубликаты и обязано доносить
     /// очистку полей до сервера.
     func testUpsertUpdatesExistingRowAndClearsFields() async throws {
@@ -141,6 +173,33 @@ final class SupabaseIntegrationTests: XCTestCase {
         XCTAssertEqual(matches.count, 1, "Повторное сохранение создало дубликат")
         XCTAssertEqual(matches.first?.name, "После правки")
         XCTAssertNil(matches.first?.googleDocURL, "Удалённая ссылка осталась на сервере")
+    }
+
+    /// Заметка недели тоже обязана переживать круг через сервер: иначе блок
+    /// «Заметки» остался бы локальным и не доехал до второго устройства.
+    func testWeekNoteSurvivesRoundTripThroughServer() async throws {
+        try await signUpFreshAccount()
+        let weekStart = CalendarRange.week(containing: Date()).start
+        let note = WeekNote(weekStart: weekStart, text: "Заказать рабочие тетради")
+
+        try await store.upsertWeekNote(note)
+        let fetched = try await store.fetchWeekNotes(weekStart: weekStart)
+
+        let restored = try XCTUnwrap(fetched.first { $0.id == note.id })
+        XCTAssertEqual(restored.text, note.text)
+        XCTAssertEqual(WeekNoteDTO.dayKey(from: restored.weekStart),
+                       WeekNoteDTO.dayKey(from: weekStart))
+
+        // Правка не должна плодить дубликаты, а удаление — оставлять строку.
+        var edited = restored
+        edited.text = "После правки"
+        try await store.upsertWeekNote(edited)
+        let afterEdit = try await store.fetchWeekNotes(weekStart: weekStart)
+        XCTAssertEqual(afterEdit.filter { $0.id == note.id }.map(\.text), ["После правки"])
+
+        try await store.deleteWeekNote(id: note.id)
+        let afterDelete = try await store.fetchWeekNotes(weekStart: weekStart)
+        XCTAssertTrue(afterDelete.allSatisfy { $0.id != note.id })
     }
 
     /// Дословное воспроизведение жалобы: на одном устройстве завели учеников и

@@ -49,7 +49,8 @@ final class DTOMappingTests: XCTestCase {
             startAt: TestSupport.date(2026, 3, 2, 10),
             durationMinutes: 90,
             isPaid: true,
-            note: "Алгебра"
+            note: "Алгебра",
+            seriesId: UUID()
         )
         let dto = LessonDTO(lesson)
         let restored = dto.toDomain()
@@ -59,6 +60,36 @@ final class DTOMappingTests: XCTestCase {
         XCTAssertEqual(restored.durationMinutes, lesson.durationMinutes)
         XCTAssertEqual(restored.isPaid, lesson.isPaid)
         XCTAssertEqual(restored.note, lesson.note)
+        XCTAssertEqual(restored.seriesId, lesson.seriesId)
+        XCTAssertTrue(restored.repeatsWeekly)
+    }
+
+    /// Снятая отметка «Каждую неделю» обязана уехать как `null`: иначе PostgREST
+    /// не увидит поле в теле запроса, и занятие останется в серии.
+    func testClearedLessonSeriesIsSentAsNull() throws {
+        let lesson = Lesson(studentId: UUID(), startAt: TestSupport.date(2026, 3, 2, 10))
+        let json = try encodedJSON(LessonDTO(lesson))
+        XCTAssertTrue(json.contains("\"series_id\":null"), "Получено: \(json)")
+    }
+
+    func testLessonSeriesUsesSnakeCaseKey() throws {
+        let seriesId = UUID()
+        let lesson = Lesson(studentId: UUID(), startAt: TestSupport.date(2026, 3, 2, 10), seriesId: seriesId)
+        let json = try encodedJSON(LessonDTO(lesson))
+        XCTAssertTrue(json.contains("\"series_id\":\"\(seriesId.uuidString)\""), "Получено: \(json)")
+    }
+
+    /// Строка, заведённая до появления повторений, приходит без `series_id` —
+    /// декодирование обязано считать такое занятие разовым, а не падать.
+    func testLessonWithoutSeriesInPayloadIsSingle() throws {
+        let json = """
+            {"id":"\(UUID().uuidString)","student_id":"\(UUID().uuidString)",
+             "start_at":"2026-03-02T10:00:00.000Z","duration_min":60,"is_paid":false,
+             "note":null,"created_at":"2026-03-02T09:00:00.000Z"}
+            """
+        let dto = try PlannerCoding.makeDecoder().decode(LessonDTO.self, from: Data(json.utf8))
+        XCTAssertNil(dto.series_id)
+        XCTAssertFalse(dto.toDomain().repeatsWeekly)
     }
 
     func testLessonDTOEncodeDecodeWithDates() throws {
@@ -96,6 +127,39 @@ final class DTOMappingTests: XCTestCase {
         XCTAssertTrue(json.contains("\"scheduled_at\""))
         XCTAssertTrue(json.contains("\"is_done\""))
         XCTAssertTrue(json.contains("\"color_hex\""))
+    }
+
+    // MARK: - Заметки недели
+
+    func testWeekNoteRoundTrip() {
+        let weekStart = Calendar.current.startOfDay(for: Date())
+        let note = WeekNote(weekStart: weekStart, text: "Заказать тетради")
+        let restored = WeekNoteDTO(note).toDomain()
+        XCTAssertEqual(restored.id, note.id)
+        XCTAssertEqual(restored.text, note.text)
+        XCTAssertEqual(restored.weekStart, weekStart, "Ключ недели не восстановился в полночь того же дня")
+    }
+
+    /// Неделя уезжает на сервер как календарная дата: колонка `week_start`
+    /// имеет тип `date`, и время в ней только помешало бы.
+    func testWeekNoteSendsWeekAsPlainDay() throws {
+        let weekStart = Calendar.current.startOfDay(for: Date())
+        let json = try encodedJSON(WeekNoteDTO(WeekNote(weekStart: weekStart, text: "Дело")))
+        let expected = WeekNoteDTO.dayKey(from: weekStart)
+        XCTAssertTrue(json.contains("\"week_start\":\"\(expected)\""), "Получено: \(json)")
+        XCTAssertFalse(json.contains("created_at"))
+    }
+
+    func testWeekNoteDecodesServerPayload() throws {
+        let json = """
+            {"id":"\(UUID().uuidString)","owner_id":"\(UUID().uuidString)",
+             "week_start":"2026-03-02","text":"С сервера",
+             "created_at":"2026-03-02T10:00:00.000Z"}
+            """
+        let dto = try PlannerCoding.makeDecoder().decode(WeekNoteDTO.self, from: Data(json.utf8))
+        XCTAssertEqual(dto.week_start, "2026-03-02")
+        XCTAssertEqual(dto.toDomain().text, "С сервера")
+        XCTAssertEqual(WeekNoteDTO.dayKey(from: dto.toDomain().weekStart), "2026-03-02")
     }
 
     // MARK: - Очистка полей и владелец

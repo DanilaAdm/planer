@@ -22,11 +22,19 @@ struct NewEntryRequest: Identifiable {
     let day: Date
 }
 
+/// Запрос на создание заметки для недели, содержащей `day`.
+struct NewNoteRequest: Identifiable {
+    let id = UUID()
+    let day: Date
+}
+
 struct CalendarRootView: View {
     @EnvironmentObject private var env: AppEnvironment
     @State private var editingLesson: Lesson?
     @State private var editingTask: PersonalTask?
     @State private var creating: NewEntryRequest?
+    @State private var editingNote: WeekNote?
+    @State private var creatingNote: NewNoteRequest?
 
     private var mode: CalendarViewMode { env.calendarMode }
 
@@ -60,6 +68,12 @@ struct CalendarRootView: View {
             .sheet(item: $creating) { request in
                 PlannerEntryEditorView(newOn: request.day)
             }
+            .sheet(item: $editingNote) { note in
+                WeekNoteEditorView(note: note)
+            }
+            .sheet(item: $creatingNote) { request in
+                WeekNoteEditorView(newOn: request.day, calendar: env.calendar)
+            }
             .task(id: mode) { await env.loadLessons(for: env.selectedDate, scope: mode.scope) }
         }
     }
@@ -67,14 +81,14 @@ struct CalendarRootView: View {
     private var header: some View {
         VStack(spacing: Theme.Spacing.sm) {
             HStack(spacing: Theme.Spacing.md) {
-                navButton(systemName: "chevron.left") { shift(by: -1) }
+                navButton(systemName: "chevron.left", identifier: "calendarPreviousButton") { shift(by: -1) }
                 Spacer(minLength: Theme.Spacing.sm)
                 SegmentedSelector(items: CalendarViewMode.allCases, selection: $env.calendarMode) {
                     $0.rawValue
                 }
                 .frame(maxWidth: 320)
                 Spacer(minLength: Theme.Spacing.sm)
-                navButton(systemName: "chevron.right") { shift(by: 1) }
+                navButton(systemName: "chevron.right", identifier: "calendarNextButton") { shift(by: 1) }
             }
 
             if env.students.isEmpty {
@@ -90,7 +104,7 @@ struct CalendarRootView: View {
         .background(Theme.surface)
     }
 
-    private func navButton(systemName: String, action: @escaping () -> Void) -> some View {
+    private func navButton(systemName: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 14, weight: .semibold))
@@ -101,6 +115,7 @@ struct CalendarRootView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     @ViewBuilder
@@ -119,7 +134,9 @@ struct CalendarRootView: View {
                 },
                 onEditLesson: { editingLesson = $0 },
                 onEditTask: { editingTask = $0 },
-                onAdd: { creating = NewEntryRequest(day: $0) }
+                onAdd: { creating = NewEntryRequest(day: $0) },
+                onEditNote: { editingNote = $0 },
+                onAddNote: { creatingNote = NewNoteRequest(day: env.selectedDate) }
             )
         case .day:
             DayView(
